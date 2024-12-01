@@ -225,7 +225,7 @@ uintptr_t AddVSyscall(bridge_t* bridge, int num)
 
 const char* getBridgeName(void* addr)
 {
-    if(!getMmapped((uintptr_t)addr))
+    if(!memExist((uintptr_t)addr))
         return NULL;
     if(!(getProtection((uintptr_t)addr)&PROT_READ))
         return NULL;
@@ -270,6 +270,11 @@ void addAlternate(void* addr, void* alt) {
     if(!ret)    // already there
         return;
     kh_value(my_alternates, k) = alt;
+}
+
+void addCheckAlternate(void* addr, void* alt) {
+    if(!hasAlternate(addr))
+        addAlternate(addr, alt);
 }
 
 void cleanAlternate() {

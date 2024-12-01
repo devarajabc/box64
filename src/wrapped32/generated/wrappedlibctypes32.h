@@ -13,6 +13,7 @@
 
 typedef void (*vEv_t)(void);
 typedef void (*vEp_t)(void*);
+typedef void (*vFp_t)(void*);
 typedef int32_t (*iEv_t)(void);
 typedef int32_t (*iEi_t)(int32_t);
 typedef int32_t (*iEL_t)(uintptr_t);
@@ -23,13 +24,14 @@ typedef uint32_t (*uES_t)(void*);
 typedef uint64_t (*UEp_t)(void*);
 typedef intptr_t (*lEi_t)(int32_t);
 typedef intptr_t (*lEp_t)(void*);
-typedef intptr_t (*lEV_t)(...);
 typedef intptr_t (*lES_t)(void*);
 typedef uintptr_t (*LEL_t)(uintptr_t);
 typedef void* (*pEv_t)(void);
 typedef void* (*pFv_t)(void);
 typedef void* (*pEu_t)(uint32_t);
+typedef void* (*pFu_t)(uint32_t);
 typedef void* (*pEL_t)(uintptr_t);
+typedef void* (*pFL_t)(uintptr_t);
 typedef void* (*pFp_t)(void*);
 typedef void* (*pEp_t)(void*);
 typedef void* (*pES_t)(void*);
@@ -48,6 +50,9 @@ typedef int32_t (*iEpp_t)(void*, void*);
 typedef int32_t (*iEpV_t)(void*, ...);
 typedef int64_t (*IEII_t)(int64_t, int64_t);
 typedef uint64_t (*UEUU_t)(uint64_t, uint64_t);
+typedef double (*KFKi_t)(double, int32_t);
+typedef double (*KFKp_t)(double, void*);
+typedef intptr_t (*lEuV_t)(uint32_t, ...);
 typedef void* (*pEip_t)(int32_t, void*);
 typedef void* (*pELL_t)(uintptr_t, uintptr_t);
 typedef void* (*pEpi_t)(void*, int32_t);
@@ -56,13 +61,13 @@ typedef void* (*SEpp_t)(void*, void*);
 typedef int32_t (*iErLL_BLL__t)(struct_LL_t*, struct_LL_t*);
 typedef void (*vEipp_t)(int32_t, void*, void*);
 typedef void (*vEipV_t)(int32_t, void*, ...);
+typedef void (*vEpuu_t)(void*, uint32_t, uint32_t);
 typedef void (*vEpup_t)(void*, uint32_t, void*);
 typedef void (*vEppu_t)(void*, void*, uint32_t);
-typedef int32_t (*iEvpp_t)(void, void*, void*);
-typedef int32_t (*iEvpV_t)(void, void*, ...);
 typedef int32_t (*iEiip_t)(int32_t, int32_t, void*);
 typedef int32_t (*iEiiN_t)(int32_t, int32_t, ...);
 typedef int32_t (*iEipp_t)(int32_t, void*, void*);
+typedef int32_t (*iEipV_t)(int32_t, void*, ...);
 typedef int32_t (*iEpii_t)(void*, int32_t, int32_t);
 typedef int32_t (*iEpLi_t)(void*, uintptr_t, int32_t);
 typedef int32_t (*iEppi_t)(void*, void*, int32_t);
@@ -77,7 +82,7 @@ typedef intptr_t (*lEppL_t)(void*, void*, uintptr_t);
 typedef void* (*pEpii_t)(void*, int32_t, int32_t);
 typedef void* (*pEpII_t)(void*, int64_t, int64_t);
 typedef void* (*pEpLL_t)(void*, uintptr_t, uintptr_t);
-typedef void* (*pEppv_t)(void*, void*, void);
+typedef void* (*pEppi_t)(void*, void*, int32_t);
 typedef double (*KEpBp_a_t)(void*, struct_p_t*, void*);
 typedef intptr_t (*lEpBp_i_t)(void*, struct_p_t*, int32_t);
 typedef uintptr_t (*LEpBp_i_t)(void*, struct_p_t*, int32_t);
@@ -85,8 +90,8 @@ typedef void (*vEiipp_t)(int32_t, int32_t, void*, void*);
 typedef void (*vEiipV_t)(int32_t, int32_t, void*, ...);
 typedef void (*vEpLLp_t)(void*, uintptr_t, uintptr_t, void*);
 typedef void (*vEppiV_t)(void*, void*, int32_t, ...);
-typedef int32_t (*iEivpV_t)(int32_t, void, void*, ...);
 typedef int32_t (*iEiiip_t)(int32_t, int32_t, int32_t, void*);
+typedef int32_t (*iEiipV_t)(int32_t, int32_t, void*, ...);
 typedef int32_t (*iEipii_t)(int32_t, void*, int32_t, int32_t);
 typedef int32_t (*iEippi_t)(int32_t, void*, void*, int32_t);
 typedef int32_t (*iEippL_t)(int32_t, void*, void*, uintptr_t);
@@ -95,21 +100,22 @@ typedef int32_t (*iEpipV_t)(void*, int32_t, void*, ...);
 typedef int32_t (*iEpLpp_t)(void*, uintptr_t, void*, void*);
 typedef int32_t (*iEpLpV_t)(void*, uintptr_t, void*, ...);
 typedef int32_t (*iEpppp_t)(void*, void*, void*, void*);
-typedef int32_t (*iESvpp_t)(void*, void, void*, void*);
-typedef int32_t (*iESvpV_t)(void*, void, void*, ...);
+typedef int32_t (*iESipp_t)(void*, int32_t, void*, void*);
+typedef int32_t (*iESipV_t)(void*, int32_t, void*, ...);
 typedef uint32_t (*uEippu_t)(int32_t, void*, void*, uint32_t);
-typedef uintptr_t (*LEpBp_iv_t)(void*, struct_p_t*, int32_t, void);
+typedef uintptr_t (*LEpBp_ii_t)(void*, struct_p_t*, int32_t, int32_t);
 typedef int32_t (*iEiippi_t)(int32_t, int32_t, void*, void*, int32_t);
+typedef int32_t (*iEipiup_t)(int32_t, void*, int32_t, uint32_t, void*);
 typedef int32_t (*iEipppp_t)(int32_t, void*, void*, void*, void*);
 typedef int32_t (*iEuppLp_t)(uint32_t, void*, void*, uintptr_t, void*);
-typedef int32_t (*iEpvvpV_t)(void*, void, void, void*, ...);
+typedef int32_t (*iEpiipV_t)(void*, int32_t, int32_t, void*, ...);
 typedef int32_t (*iEpiLpp_t)(void*, int32_t, uintptr_t, void*, void*);
 typedef int32_t (*iEpipOi_t)(void*, int32_t, void*, int32_t, int32_t);
 typedef int32_t (*iEppupi_t)(void*, void*, uint32_t, void*, int32_t);
 typedef int32_t (*iEpppLp_t)(void*, void*, void*, uintptr_t, void*);
 typedef void* (*pEpLLiN_t)(void*, uintptr_t, uintptr_t, int32_t, ...);
 typedef void* (*pEppLLp_t)(void*, void*, uintptr_t, uintptr_t, void*);
-typedef int32_t (*iEpLvvpp_t)(void*, uintptr_t, void, void, void*, void*);
+typedef int32_t (*iEpLiipp_t)(void*, uintptr_t, int32_t, int32_t, void*, void*);
 typedef int32_t (*iEpLiipV_t)(void*, uintptr_t, int32_t, int32_t, void*, ...);
 typedef int32_t (*iEpLiLpV_t)(void*, uintptr_t, int32_t, uintptr_t, void*, ...);
 typedef int32_t (*iFpppupp_t)(void*, void*, void*, uint32_t, void*, void*);
@@ -123,6 +129,7 @@ typedef int32_t (*iEpLiLppp_t)(void*, uintptr_t, int32_t, uintptr_t, void*, void
 #define SUPER() ADDED_FUNCTIONS() \
 	GO(freeaddrinfo, vEp_t) \
 	GO(regfree, vEp_t) \
+	GO(_ZGTtdlPv, vFp_t) \
 	GO(__close_nocancel, iEi_t) \
 	GO(posix_spawn_file_actions_destroy, iEp_t) \
 	GO(posix_spawn_file_actions_init, iEp_t) \
@@ -139,6 +146,9 @@ typedef int32_t (*iEpLiLppp_t)(void*, uintptr_t, int32_t, uintptr_t, void*, void
 	GO(localeconv, pEv_t) \
 	GO(__h_errno_location, pFv_t) \
 	GO(getpwuid, pEu_t) \
+	GO(_ZGTtnaj, pFu_t) \
+	GO(_ZGTtnaX, pFL_t) \
+	GO(_ZGTtnam, pFL_t) \
 	GO(gethostbyname, pFp_t) \
 	GO(getprotobyname, pEp_t) \
 	GO(getpwnam, pEp_t) \
@@ -148,6 +158,7 @@ typedef int32_t (*iEpLiLppp_t)(void*, uintptr_t, int32_t, uintptr_t, void*, void
 	GO(getifaddrs, iEbp__t) \
 	GO(ctime, pErl__t) \
 	GO(asctime, pEriiiiiiiiilt__t) \
+	GO(_obstack_newchunk, vEpi_t) \
 	GO(futimens, iEip_t) \
 	GO(futimes, iEip_t) \
 	GO(getrlimit, iEup_t) \
@@ -161,6 +172,8 @@ typedef int32_t (*iEpLiLppp_t)(void*, uintptr_t, int32_t, uintptr_t, void*, void
 	GO(utimes, iEpp_t) \
 	GO(execl, iEpV_t) \
 	GO(execlp, iEpV_t) \
+	GO(ldexpl, KFKi_t) \
+	GO(frexpl, KFKp_t) \
 	GO(signal, pEip_t) \
 	GO(aligned_alloc, pELL_t) \
 	GO(backtrace_symbols, pEpi_t) \
@@ -181,7 +194,7 @@ typedef int32_t (*iEpLiLppp_t)(void*, uintptr_t, int32_t, uintptr_t, void*, void
 	GO(recvmsg, lEipi_t) \
 	GO(sendmsg, lEipi_t) \
 	GO(writev, lEipi_t) \
-	GO(__realpath_chk, pEppv_t) \
+	GO(__realpath_chk, pEppi_t) \
 	GO(__strtold_l, KEpBp_a_t) \
 	GO(strtold_l, KEpBp_a_t) \
 	GO(wcstol, lEpBp_i_t) \
@@ -192,6 +205,7 @@ typedef int32_t (*iEpLiLppp_t)(void*, uintptr_t, int32_t, uintptr_t, void*, void
 	GO(readlinkat, iEippL_t) \
 	GO(getaddrinfo, iEpppp_t) \
 	GO(regerror, uEippu_t) \
+	GO(statx, iEipiup_t) \
 	GO(getopt_long, iEipppp_t) \
 	GO(getgrgid_r, iEuppLp_t) \
 	GO(getpwuid_r, iEuppLp_t) \

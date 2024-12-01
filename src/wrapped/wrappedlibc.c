@@ -105,15 +105,8 @@ typedef void* (*pFp_t)(void*);
 typedef void* (*pFpip_t)(void*, int, void*);
 
 #define ADDED_FUNCTIONS() \
-    GO(_ITM_addUserCommitAction, iFpup_t)   \
-    GO(_IO_file_stat, iFpp_t)               \
-    GO(fts64_open, pFpip_t)                 \
-    GO(register_printf_specifier, iFipp_t)  \
-    GO(register_printf_type, iFp_t)         \
-    GO(statx, iFipiup_t)
 
-
-#include "generated/wrappedlibcupstypes.h"
+#include "generated/wrappedlibctypes.h"
 
 #include "wrappercallback.h"
 
@@ -662,6 +655,7 @@ int of_unconvert(int a)
 #undef SUPER
 
 EXPORT void* my__ZGTtnaX (size_t a) { (void)a; printf("warning _ZGTtnaX called\n"); return NULL; }
+EXPORT void* my__ZGTtnam (size_t a) { (void)a; printf("warning _ZGTtnam called\n"); return NULL; }
 EXPORT void my__ZGTtdlPv (void* a) { (void)a; printf("warning _ZGTtdlPv called\n"); }
 EXPORT uint8_t my__ITM_RU1(const uint8_t * a) { (void)a; printf("warning _ITM_RU1 called\n"); return 0; }
 EXPORT uint32_t my__ITM_RU4(const uint32_t * a) { (void)a; printf("warning _ITM_RU4 called\n"); return 0; }

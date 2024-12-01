@@ -1145,7 +1145,7 @@ void my_sigactionhandler_oldcode(x64emu_t* emu, int32_t sig, int simple, siginfo
     TRAP_x86_CACHEFLT   = 19   // SIMD exception (via SIGFPE) if CPU is SSE capable otherwise Cache flush exception (via SIGSEV)
     */
     uint32_t prot = getProtection((uintptr_t)info->si_addr);
-    uint32_t mmapped = getMmapped((uintptr_t)info->si_addr);
+    uint32_t mmapped = memExist((uintptr_t)info->si_addr);
     uint32_t real_prot = 0;
     if(prot&PROT_READ) real_prot|=PROT_READ;
     if(prot&PROT_WRITE) real_prot|=PROT_WRITE;
@@ -1620,7 +1620,7 @@ dynarec_log(/*LOG_DEBUG*/LOG_INFO, "Repeated SIGSEGV with Access error on %p for
     static int old_tid = 0;
     static uint32_t old_prot = 0;
     int tid = GetTID();
-    int mapped = getMmapped((uintptr_t)addr);
+    int mapped = memExist((uintptr_t)addr);
     const char* signame = (sig==SIGSEGV)?"SIGSEGV":((sig==SIGBUS)?"SIGBUS":((sig==SIGILL)?"SIGILL":"SIGABRT"));
     if(old_code==info->si_code && old_pc==pc && old_addr==addr && old_tid==tid && old_prot==prot) {
         printf_log(log_minimum, "%04d|Double %s (code=%d, pc=%p, addr=%p, prot=%02x)!\n", tid, signame, old_code, old_pc, old_addr, prot);
@@ -1946,6 +1946,36 @@ void emit_signal(x64emu_t* emu, int sig, void* addr, int code)
             elfname = ElfName(elf);
         printf_log(LOG_NONE, "Emit Signal %d at IP=%p(%s / %s) / addr=%p, code=0x%x\n", sig, (void*)R_RIP, x64name?x64name:"???", elfname?elfname:"?", addr, code);
 print_cycle_log(LOG_INFO);
+
+        if((box64_showbt || sig==SIGABRT) && box64_log>=LOG_INFO) {
+            // show native bt
+            #define BT_BUF_SIZE 100
+            int nptrs;
+            void *buffer[BT_BUF_SIZE];
+            char **strings;
+
+#ifndef ANDROID
+            nptrs = backtrace(buffer, BT_BUF_SIZE);
+            strings = backtrace_symbols(buffer, nptrs);
+            if(strings) {
+                for (int j = 0; j < nptrs; j++)
+                    printf_log(LOG_INFO, "NativeBT: %s\n", strings[j]);
+                free(strings);
+            } else
+                printf_log(LOG_INFO, "NativeBT: none (%d/%s)\n", errno, strerror(errno));
+#endif
+            extern int my_backtrace_ip(x64emu_t* emu, void** buffer, int size);   // in wrappedlibc
+            extern char** my_backtrace_symbols(x64emu_t* emu, uintptr_t* buffer, int size);
+            // save and set real RIP/RSP
+            nptrs = my_backtrace_ip(emu, buffer, BT_BUF_SIZE);
+            strings = my_backtrace_symbols(emu, (uintptr_t*)buffer, nptrs);
+            if(strings) {
+                for (int j = 0; j < nptrs; j++)
+                    printf_log(LOG_INFO, "EmulatedBT: %s\n", strings[j]);
+                free(strings);
+            } else
+                printf_log(LOG_INFO, "EmulatedBT: none\n");
+        }
 printf_log(LOG_NONE, DumpCPURegs(emu, R_RIP, emu->segs[_CS]==0x23));
 printf_log(LOG_NONE, "Emu Stack: %p 0x%lx%s\n", emu->init_stack, emu->size_stack, emu->stack2free?" owned":"");
         //if(!elf) {

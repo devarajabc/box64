@@ -26,6 +26,9 @@
 #include "auxval.h"
 #include "elfloader.h"
 #include "bridge.h"
+#ifdef BOX32
+#include "myalign32.h"
+#endif
 
 typedef void    (*vFv_t)    ();
 typedef int32_t (*iFppp_t)  (void*, void*, void*);
@@ -218,6 +221,12 @@ EXPORT void my__obstack_newchunk(x64emu_t* emu, struct obstack* obstack, int s)
 {
     _obstack_newchunk(obstack, s);
 }
+#ifdef BOX32
+EXPORT void my32__obstack_newchunk(x64emu_t* emu, struct obstack* obstack, int s)
+{
+    _obstack_newchunk(obstack, s);
+}
+#endif
 
 EXPORT int32_t my_obstack_vprintf(x64emu_t* emu, struct obstack* obstack, void* fmt, x64_va_list_t V)
 {
@@ -230,6 +239,15 @@ EXPORT int32_t my_obstack_vprintf(x64emu_t* emu, struct obstack* obstack, void* 
     int r = obstack_vprintf(obstack, (const char*)fmt, VARARGS);
     return r;
 }
+#ifdef BOX32
+EXPORT int32_t my32_obstack_vprintf(x64emu_t* emu, struct obstack* obstack, void* fmt, void* b)
+{
+    myStackAlign32((const char*)fmt, b, emu->scratch);
+    PREPARE_VALIST_32;
+    int r = obstack_vprintf(obstack, (const char*)fmt, VARARGS_32);
+    return r;
+}
+#endif
 #endif
 
 EXPORT void* my_obstack_alloc_failed_handler = NULL;

@@ -1431,6 +1431,8 @@ static int eval_expression(loginfo_t *li, machine_t *target, expr_t *e, khash_t(
 	}
 }
 
+extern int is_gst; // If 1, mark structures _G*Class as simple
+
 // declaration-specifier with storage != NULL
 // specifier-qualifier-list + static_assert-declaration with storage == NULL
 static int parse_declaration_specifier(machine_t *target, khash_t(struct_map) *struct_map, khash_t(type_map) *type_map, khash_t(type_map) *enum_map,
@@ -2047,6 +2049,13 @@ parse_cur_token_decl:
 			typ->val.st->nmembers = vector_size(st_members, members);
 			typ->val.st->members = vector_steal(st_members, members);
 			typ->val.st->is_defined = 1;
+			if (is_gst
+			       && typ->val.st->tag
+			       && (string_len(typ->val.st->tag) >= 7)
+			       && !strncmp(string_content(typ->val.st->tag), "_G", 2)
+			       && !strcmp(string_content(typ->val.st->tag) + string_len(typ->val.st->tag) - 5, "Class")) {
+				typ->val.st->is_simple = 1;
+			}
 			*tok = proc_next_token(prep);
 			goto parse_cur_token_decl;
 		} else {
@@ -2960,7 +2969,6 @@ static int parse_declarator(machine_t *target, struct parse_declarator_dest_s *d
 						if (!type_t_equal(typ, kh_val(dest->f->type_map, it))) {
 							log_error(&tok->loginfo, "'%s' is already in the type map with a different type\n", cident);
 							free(cident);
-							type_del(typ);
 							// Empty destructor
 							goto failed;
 						}
@@ -2999,7 +3007,6 @@ static int parse_declarator(machine_t *target, struct parse_declarator_dest_s *d
 								log_error(&tok->loginfo, "'%s' is already in the declaration map\n", cident);
 								free(cident);
 								free(decl);
-								type_del(typ);
 								// Empty destructor
 								goto failed;
 							} else {
@@ -3020,6 +3027,7 @@ static int parse_declarator(machine_t *target, struct parse_declarator_dest_s *d
 									typ = type_new();
 									if (!typ) {
 										log_memory("failed to allocate new type\n");
+										type_del(base_type);
 										// Empty destructor
 										goto failed;
 									}
@@ -3054,6 +3062,7 @@ static int parse_declarator(machine_t *target, struct parse_declarator_dest_s *d
 						goto failed;
 					}
 				}
+				typ = base_type; ++typ->nrefs;
 				if ((tok->tokt == PTOK_SYM) && (tok->tokv.sym == SYM_EQ)) {
 					// Initialization
 					if (!is_init) {
@@ -3085,6 +3094,7 @@ static int parse_declarator(machine_t *target, struct parse_declarator_dest_s *d
 							proc_token_del(tok);
 							goto failed;
 						}
+						*tok = proc_next_token(prep);
 					} else {
 						expr_t *e = parse_expression(target, PDECL_STRUCT_MAP, PDECL_TYPE_MAP, PDECL_ENUM_MAP, PDECL_BUILTINS,
 						                             PDECL_CONST_MAP, PDECL_TYPE_SET, prep, tok, 15);
@@ -3101,10 +3111,11 @@ static int parse_declarator(machine_t *target, struct parse_declarator_dest_s *d
 					}
 					validation = (tok->tokv.sym == SYM_SEMICOLON) ? VALIDATION_LAST_DECL : VALIDATION_DECL;
 				}
-				if (validation == VALIDATION_LAST_DECL) goto success;
-				else {
+				if (validation == VALIDATION_LAST_DECL) {
+					--typ->nrefs;
+					goto success;
+				} else {
 					cur_ident = NULL; has_ident = 0;
-					typ = base_type; ++typ->nrefs;
 					cur_bottom = NULL;
 					vector_last(size_t, nptr_stack) = 0;
 					*tok = proc_next_token(prep);
@@ -3393,6 +3404,8 @@ file_t *parse_file(machine_t *target, const char *filename, FILE *file) {
 		proc_token_t tok = proc_next_token(prep);
 		if (tok.tokt == PTOK_EOF) {
 			goto success;
+		} else if ((tok.tokt == PTOK_SYM) && (tok.tokv.sym == SYM_SEMICOLON)) {
+			// Empty destructor
 		} else if (tok.tokt == PTOK_PRAGMA) {
 			switch (tok.tokv.pragma.typ) {
 			case PRAGMA_ALLOW_INTS: {

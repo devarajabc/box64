@@ -221,7 +221,7 @@ GOW2(dl_iterate_phdr, iEEpp, my_dl_iterate_phdr) //%%
 // _dl_vsym
 //GOW(dngettext, pEpppu)
 //GOM(dprintf, iEEipV)
-GOM(__dprintf_chk, iEEivpV)	//%%
+GOM(__dprintf_chk, iEEiipV)	//%%
 GO(drand48, dEv)
 // drand48_r
 GOW(dup, iEi)
@@ -298,7 +298,7 @@ GOWM(execvpe, iEEppp)
 GO(exit, vEi)
 GO(_exit, vEi)
 GOW(_Exit, vEi)
-//GOM(__explicit_bzero_chk, vEEpuu)    //%% not always defined
+GOM(__explicit_bzero_chk, vEEpuu)    //%% not always defined
 GO(faccessat, iEipii)
 // fattach
 //GO(__fbufsize, uEp)
@@ -376,7 +376,7 @@ GOM(__fork, iEEv)           //%%
 GOW(fpathconf, lEii)
 //GO(__fpending, uEp)
 GOM(fprintf, iEESpV) //%%
-GOM(__fprintf_chk, iEESvpV) //%%
+GOM(__fprintf_chk, iEESipV) //%%
 // __fpu_control    // type B
 //GO(__fpurge, vEp)
 GOW(fputc, iEiS)
@@ -402,9 +402,13 @@ GO(__freelocale, vEA)
 GO(fremovexattr, iEip)
 GO(freopen, SEppS)
 GO(freopen64, SEppS)
-// frexp    // Weak
+GOW(frexp, dFdp)
 // frexpf   // Weak
-// frexpl   // Weak
+#ifdef HAVE_LD80BITS
+GOW(frexpl, DFDp)
+#else
+GOW2(frexpl, KFKp, frexp)
+#endif
 GOM(fscanf, iEESpV)
 GO(fseek, iESli)
 GO(fseeko, iESli)
@@ -472,8 +476,8 @@ GOW(getcwd, tEpL)
 //GO(getdate, pEp)
 // getdate_err  // type B
 // getdate_r    // Weak
-//GOW(getdelim, iEppip)
-//GOW(__getdelim, iEppip)
+//GOW(getdelim, iEbp_bL_iS)
+GOW(__getdelim, iEbp_bL_iS)
 // getdirentries
 // getdirentries64
 //GO(getdomainname, iEpu)
@@ -517,7 +521,7 @@ GO(getlogin_r, iEpL)
 // __getlogin_r_chk
 GOM(getmntent, pEES)
 // __getmntent_r
-//GOW(getmntent_r, pEpppi)
+GOW(getmntent_r, pESBppppii_pi)
 // getmsg
 // get_myaddress
 GO(getnameinfo, iEpupupui)
@@ -595,6 +599,7 @@ GOW(getsockopt, iEiiipp)
 // getspnam_r
 // getsubopt
 GOW(gettext, pEp)
+GOW(gettid, iEv)
 GOW(gettimeofday, iEBll_p)
 //GO(__gettimeofday, iEpp)
 // getttyent
@@ -639,7 +644,7 @@ GO(grantpt, iEi)
 // group_member // Weak
 // gsignal  // Weak
 // gtty
-//GOW(hasmntopt, pEpp)
+GOW(hasmntopt, pErppppii_p)
 // hcreate
 // hcreate_r
 // hdestroy // Weak
@@ -982,9 +987,13 @@ GOW(lchown, iEpuu)
 // lckpwdf  // Weak
 // lcong48
 // lcong48_r    // Weak
-// ldexp    // Weak
-// ldexpf   // Weak
-// ldexpl   // Weak
+GOW(ldexp, dFdi)
+GOW(ldexpf, fFfi)
+#ifdef HAVE_LD80BITS
+GOW(ldexpl, DFDi)
+#else
+GOW2(ldexpl, KFKi, ldexp)
+#endif
 //GOS(ldiv, pEEpii)               //%% return a struct, so address of stuct is on the stack, as a shadow 1st element
 //GOM(lfind, pEEpppLp)            //%%
 //GO(lgetxattr, iEpppu)
@@ -1073,7 +1082,7 @@ GOW(mallopt, iEii)  // Weak
 //GO(__mbrlen, LEpLp)
 GOW(mbrtowc, LEppLp)
 GO(__mbrtowc, LEppLp)
-//GOW(mbsinit, iEp)
+GOW(mbsinit, iEp)
 GOW(mbsnrtowcs, LEpbp_LLp)
 // __mbsnrtowcs_chk
 GOW(mbsrtowcs, LEpbp_Lp)
@@ -1112,7 +1121,7 @@ GO(mkdirat, iEipu)
 GO(mkdtemp, pEp)
 GO(mkfifo, iEpu)
 //GO(mkfifoat, iEipu)
-//GO(mkostemp, iEpi)
+GO(mkostemp, iEpi)
 GO(mkostemp64, iEpi)
 GO(mkstemp, iEp)
 GO(mkstemp64, iEp)
@@ -1194,10 +1203,10 @@ GOW(ntohs, WEW)
 //GOM(_obstack_free, vEpp)     //%%,noE
 //GOM(obstack_free, vEpp)      //%%,noE
 // _obstack_memory_used
-//GOM(_obstack_newchunk, vEpi) //%%,noE
+GOM(_obstack_newchunk, vEEpi)
 // obstack_printf   // Weak
 // __obstack_printf_chk
-//GOWM(obstack_vprintf, iEEpppp)  //%%
+GOWM(obstack_vprintf, iEEpppp)  //%%
 // __obstack_vprintf_chk
 //GOWM(on_exit, iEEpp)  //%%
 //GO2(__on_exit, iEEpp, my_on_exit)   //%%
@@ -1281,7 +1290,7 @@ GOW(pread64, lEipLI)
 //GOM(preadv64, lEEipiI)  //%% not always present
 // __pread_chk
 GOM(printf, iEEpV) //%%
-GOM(__printf_chk, iEEvpV) //%%
+GOM(__printf_chk, iEEipV) //%%
 //GO(__printf_fp, iEppp)  // does this needs aligment?
 // printf_size
 // printf_size_info
@@ -1362,7 +1371,7 @@ GOM(readv, lEEipi)
 GO(realloc, pEpL)
 //DATAV(__realloc_hook, 4)
 GOM(realpath, pEEpp) //%%
-GO2(__realpath_chk, pEEppv, my32_realpath)
+GO2(__realpath_chk, pEEppi, my32_realpath)
 // reboot
 // re_comp  // Weak
 // re_compile_fastmap   // Weak
@@ -1403,7 +1412,7 @@ GO(__res_init, iEv)
 //GO(__res_ninit, iEp)
 //DATA(__resp, 4)
 // __res_randomid
-//GO(__res_state, pEv)
+GO(__res_state, pEv)    // the returned struture certainly needs wrapping
 //DATA(re_syntax_options, 4)    // type B
 // revoke
 GO(rewind, vES)
@@ -1589,7 +1598,7 @@ GOW(socket, iEiii)
 GOW(socketpair, iEiiip)
 //GO(splice, iEipipuu)
 GOM(sprintf, iEEppV) //%%
-GOM(__sprintf_chk, iEEpvvpV) //%%
+GOM(__sprintf_chk, iEEpiipV) //%%
 // sprofil  // Weak
 GOW(srand, vEu)
 GO(srand48, vEl)
@@ -1607,6 +1616,7 @@ GOWM(statfs, iEpp)  //%%,noE
 GOWM(statfs64, iEpp)     //%%,noE
 GOM(statvfs, iEEpp)
 GOWM(statvfs64, iEEpp)
+GOM(statx, iEEipiup)
 DATAM(stderr, 4)
 DATAM(stdin, 4)
 DATAM(stdout, 4)
@@ -1616,7 +1626,7 @@ GO(stpcpy, pEpp)
 // __stpcpy
 GO(__stpcpy_chk, pEppL)
 // __stpcpy_small
-//GOW(stpncpy, pEppL)
+GOW(stpncpy, pEppL)
 //GO(__stpncpy, pEppL)
 //GO(__stpncpy_chk, pEppLL)
 GOW(strcasecmp, iEpp)
@@ -1643,7 +1653,7 @@ GO(strcspn, LEpp)
 GOW(strdup, pEp)
 GO(__strdup, pEp)
 GO(strerror, tEi)
-//GO(strerror_l, pEip)
+GO(strerror_l, pEia)
 GO(__strerror_r, pEipL)
 GOW(strerror_r, pEipL)
 //GO(strfmon, lEpLpppppppppp) //vaarg, probably needs align, there are just double...
@@ -1716,7 +1726,7 @@ GO(__strtoll_internal, IEpBp_ii)
 //GOW(strtoll_l, IEppip)
 //GOW(strtoq, IEppi)  // is that ok?
 GOM(strtoul, LEpBp_i)   //%%,noE
-GO2(__strtoul_internal, LEpBp_iv, my32_strtoul) //%%,noE
+GO2(__strtoul_internal, LEpBp_ii, my32_strtoul) //%%,noE
 GO(strtoull, UEpBp_i)
 //GO(__strtoul_l, uEppip)
 //GOW(strtoul_l, LEppip)
@@ -1725,9 +1735,9 @@ GO(__strtoull_internal, UEpBp_ii)
 //GOW(strtoull_l, UEppip)
 //GO(strtoumax, UEppi)
 //GOW(strtouq, UEppi) // ok?
-//GOW(strverscmp, iEpp)
+GOW(strverscmp, iEpp)
 // __strverscmp
-//GO(strxfrm, uEppu)
+GO(strxfrm, uEppL)
 GO(__strxfrm_l, LEppLa)
 //GO(strxfrm_l, uEppup)
 // stty
@@ -1771,7 +1781,7 @@ GO(symlinkat, iEpip)
 GO(sync, vEv)
 GO(syncfs, iEi)
 // sync_file_range
-GOM(syscall, lEEV) //%%
+GOM(syscall, lEEuV) //%%
 GOW2(sysconf, lEEi, my_sysconf)
 GO2(__sysconf, lEEi, my_sysconf)
 // sysctl   // Weak
@@ -1851,7 +1861,7 @@ GO(truncate64, iESU)
 //DATA(__tzname, 4)
 GOWM(tzset, vEv)    //%%,noE
 // ualarm
-//GO(__uflow, iEp)
+GO(__uflow, iES)
 // ulckpwdf // Weak
 // ulimit   // Weak
 GOW(umask, uEu)
@@ -1891,7 +1901,7 @@ GOM(__vasprintf_chk, iEEpipp) //%%
 GOWM(vfork, iEEv) //%%
 // __vfork
 GOM(vfprintf, iEESpp) //%%
-GOM(__vfprintf_chk, iEESvpp) //%%
+GOM(__vfprintf_chk, iEESipp) //%%
 //GOWM(vfscanf, iEEppp)  //%%
 // __vfscanf
 //GOWM(vfwprintf, iEEppp)    //%%
@@ -1901,11 +1911,11 @@ GOM(__vfprintf_chk, iEESvpp) //%%
 // vlimit
 // vmsplice
 GOM(vprintf, iEEpp)               //%%
-GOM(__vprintf_chk, iEEvpp)        //%%
+GOM(__vprintf_chk, iEEipp)        //%%
 // vscanf   // Weak
 GOWM(vsnprintf, iEEpLpp)         //%%
 GOWM(__vsnprintf, iEEpLpp)       //%%
-GOM(__vsnprintf_chk, iEEpLvvpp)  //%%
+GOM(__vsnprintf_chk, iEEpLiipp)  //%%
 GOWM(vsprintf, iEEppp)            //%%
 GOM(__vsprintf_chk, iEEpiLpp)     //%% 
 //GOM(vsscanf, iEEppp) //%%
@@ -2022,7 +2032,7 @@ GO(wctob, iEu)
 //GOW(wctype, uEp)
 GO(__wctype_l, hEpa)
 GOW(wctype_l, hEpa)
-//GO(wcwidth, iEu)
+GO(wcwidth, iEu)
 GOW(wmemchr, pEpiL)
 GO(wmemcmp, iEppL)
 GOW(wmemcpy, pEppL)
@@ -2147,14 +2157,18 @@ GO2(__close_nocancel, iEi, close)
 
 // not found (libitm???), but it seems OK to declare dummies:
 
-GOM(_ITM_RU1, uEp)          //%%,noE
-GOM(_ITM_RU4, uEp)          //%%,noE
-GOM(_ITM_RU8, UEp)          //%%,noE
-GOM(_ITM_memcpyRtWn, vEppu) //%%,noE register(2)
-GOM(_ITM_memcpyRnWt, vEppu) //%%,noE register(2)
-GOM(_ITM_addUserCommitAction, vEEpup)
-GOM(_ITM_registerTMCloneTable, vEEpu)  //%%
-GOM(_ITM_deregisterTMCloneTable, vEEp) //%%
+GOWM(_ZGTtdlPv, vFp)    //%noE
+GOWM(_ZGTtnaX, pFL) //%noE
+GOWM(_ZGTtnam, pFL) //%noE
+GOWM(_ZGTtnaj, pFu) //%noE
+GOWM(_ITM_RU1, uEp)          //%%,noE
+GOWM(_ITM_RU4, uEp)          //%%,noE
+GOWM(_ITM_RU8, UEp)          //%%,noE
+GOWM(_ITM_memcpyRtWn, vEppu) //%%,noE register(2)
+GOWM(_ITM_memcpyRnWt, vEppu) //%%,noE register(2)
+GOWM(_ITM_addUserCommitAction, vEEpup)
+GOWM(_ITM_registerTMCloneTable, vEEpu)  //%%
+GOWM(_ITM_deregisterTMCloneTable, vEEp) //%%
 
 GOM(__umoddi3, UEUU)        //%%,noE
 GOM(__udivdi3, UEUU)        //%%,noE

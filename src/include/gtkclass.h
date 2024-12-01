@@ -2313,6 +2313,8 @@ void AutoBridgeGtk(void*(*ref)(size_t), void(*unref)(void*));
 
 void* wrapCopyGTKClass(void* cl, size_t type);
 void* unwrapCopyGTKClass(void* klass, size_t type);
+void wrapGTKClass(void* cl, size_t type);
+void unwrapGTKClass(void* klass, size_t type);
 
 void unwrapGTKInterface(void* cl, size_t type);
 void* wrapCopyGTKInterface(void* cl, size_t type);
@@ -2322,20 +2324,6 @@ void unwrapGTKInstance(void* cl, size_t type);
 void bridgeGTKInstance(void* cl, size_t type);
 
 void addRegisteredClass(size_t klass, char* name);
-
-typedef struct my_signal_s {
-    uint64_t sign;  // signature
-    void* data;
-    uintptr_t c_handler;
-    uintptr_t destroy;
-} my_signal_t;
-// some random sign to identify a my_signal_t
-#define SIGN 0xFB3405EB4510AA00LL
-
-my_signal_t* new_mysignal(void* f, void* data, void* destroy);
-void my_signal_delete(my_signal_t* sig);
-int my_signal_is_valid(void* sig);
-int my_signal_cb(void* a, void* b, void* c, void* d);
 
 void my_add_signal_offset(size_t klass, uint32_t offset, int n);
 

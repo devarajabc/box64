@@ -431,13 +431,13 @@ uintptr_t dynarec64_F30F(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int 
             break;
         case 0xB8:
             INST_NAME("POPCNT Gd, Ed");
-            SETFLAGS(X_ALL, SF_SET);
+            SETFLAGS(X_ALL, SF_SET, NAT_FLAGS_NOFUSION);
             SET_DFNONE();
             nextop = F8;
             GETED(0);
             GETGD;
             if (!rex.w && MODREG) {
-                AND(x4, ed, xMASK);
+                ZEXTW2(x4, ed);
                 ed = x4;
             }
             CLEAR_FLAGS();
@@ -473,13 +473,13 @@ uintptr_t dynarec64_F30F(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int 
             break;
         case 0xBC:
             INST_NAME("TZCNT Gd, Ed");
-            SETFLAGS(X_ZF, SF_SUBSET);
+            SETFLAGS(X_ZF, SF_SUBSET, NAT_FLAGS_NOFUSION);
             SET_DFNONE();
             nextop = F8;
             GETED(0);
             GETGD;
             if (!rex.w && MODREG) {
-                AND(x4, ed, xMASK);
+                ZEXTW2(x4, ed);
                 ed = x4;
             }
             ANDI(xFlags, xFlags, ~((1 << F_ZF) | (1 << F_CF)));
@@ -494,13 +494,13 @@ uintptr_t dynarec64_F30F(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int 
             break;
         case 0xBD:
             INST_NAME("LZCNT Gd, Ed");
-            SETFLAGS(X_ZF | X_CF, SF_SUBSET);
+            SETFLAGS(X_ZF | X_CF, SF_SUBSET, NAT_FLAGS_NOFUSION);
             SET_DFNONE();
             nextop = F8;
             GETED(0);
             GETGD;
             if (!rex.w && MODREG) {
-                AND(x4, ed, xMASK);
+                ZEXTW2(x4, ed);
                 ed = x4;
             }
             BNE_MARK(ed, xZR);

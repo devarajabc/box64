@@ -123,6 +123,21 @@ void myStackAlign(x64emu_t* emu, const char* fmt, uint64_t* st, uint64_t* mystac
                     mystack++;
                 memcpy(mystack, st, 16);
                 st+=2; mystack+=2;
+                #elif defined(ANDROID)
+                // there is 128bits long double on native and x64 side
+                // need to align stacks to 128bits boundaries
+                if((((uintptr_t)mystack)&0xf)!=0)
+                    mystack++;
+                if(xmm) {
+                    memcpy(mystack, &emu->xmm[x++], 16);
+                    st+=2; mystack+=2;
+                    --xmm;
+                } else {
+                    if((((uintptr_t)st)&0xf)!=0)
+                        st++;
+                    memcpy(mystack, st, 16);
+                    st+=2; mystack+=2;
+                }
                 #else
                 // there is 128bits long double on ARM64, but they need 128bit alignment
                 if((((uintptr_t)mystack)&0xf)!=0)
@@ -366,6 +381,21 @@ void myStackAlignW(x64emu_t* emu, const char* fmt, uint64_t* st, uint64_t* mysta
                     mystack++;
                 memcpy(mystack, st, 16);
                 st+=2; mystack+=2;
+                #elif defined(ANDROID)
+                // there is 128bits long double on native and x64 side
+                // need to align stacks to 128bits boundaries
+                if((((uintptr_t)mystack)&0xf)!=0)
+                    mystack++;
+                if(xmm) {
+                    memcpy(mystack, &emu->xmm[x++], 16);
+                    st+=2; mystack+=2;
+                    --xmm;
+                } else {
+                    if((((uintptr_t)st)&0xf)!=0)
+                        st++;
+                    memcpy(mystack, st, 16);
+                    st+=2; mystack+=2;
+                }
                 #else
                 // there is 128bits long double on ARM64, but they need 128bit alignment
                 if((((uintptr_t)mystack)&0xf)!=0)
@@ -743,6 +773,20 @@ void myStackAlignValist(x64emu_t* emu, const char* fmt, uint64_t* mystack, x64_v
                     mystack++;
                 memcpy(mystack, st, 16);
                 st+=2; mystack+=2;
+                #elif defined(ANDROID)
+                // there is 128bits long double on native and x64 side
+                // need to align stacks to 128bits boundaries
+                if((((uintptr_t)mystack)&0xf)!=0)
+                    mystack++;
+                if(fprs<X64_VA_MAX_XMM) {
+                    memcpy(mystack, &area[fprs/8], 16);
+                    fprs+=16; mystack+=2;
+                } else {
+                    if((((uintptr_t)st)&0xf)!=0)
+                        st++;
+                    memcpy(mystack, st, 16);
+                    st+=2; mystack+=2;
+                }
                 #else
                 // there is 128bits long double on ARM64, but they need 128bit alignment
                 if((((uintptr_t)mystack)&0xf)!=0)
@@ -888,6 +932,20 @@ void myStackAlignWValist(x64emu_t* emu, const char* fmt, uint64_t* mystack, x64_
                     mystack++;
                 memcpy(mystack, st, 16);
                 st+=2; mystack+=2;
+                #elif defined(ANDROID)
+                // there is 128bits long double on native and x64 side
+                // need to align stacks to 128bits boundaries
+                if((((uintptr_t)mystack)&0xf)!=0)
+                    mystack++;
+                if(fprs<X64_VA_MAX_XMM) {
+                    memcpy(mystack, &area[fprs/8], 16);
+                    fprs+=16; mystack+=2;
+                } else {
+                    if((((uintptr_t)st)&0xf)!=0)
+                        st++;
+                    memcpy(mystack, st, 16);
+                    st+=2; mystack+=2;
+                }
                 #else
                 // there is 128bits long double on ARM64, but they need 128bit alignment
                 if((((uintptr_t)mystack)&0xf)!=0)
@@ -1183,121 +1241,11 @@ void myStackAlignGVariantNew(x64emu_t* emu, const char* fmt, uint64_t* scratch, 
 
 #endif
 
-#define MUTEX_SIZE_X64 40
-typedef struct my_xcb_ext_s {
-    pthread_mutex_t lock;
-    struct lazyreply *extensions;
-    int extensions_size;
-} my_xcb_ext_t;
-  
-typedef struct x64_xcb_ext_s {
-    uint8_t lock[MUTEX_SIZE_X64];
-    struct lazyreply *extensions;
-    int extensions_size;
-} x64_xcb_ext_t;
-
-typedef struct my_xcb_xid_s {
-    pthread_mutex_t lock;
-    uint32_t last;
-    uint32_t base;
-    uint32_t max;
-    uint32_t inc;
-} my_xcb_xid_t;
-
-typedef struct x64_xcb_xid_s {
-    uint8_t lock[MUTEX_SIZE_X64];
-    uint32_t last;
-    uint32_t base;
-    uint32_t max;
-    uint32_t inc;
-} x64_xcb_xid_t;
-
-typedef struct my_xcb_fd_s {
-    int fd[16];
-    int nfd;
-    int ifd;
-} my_xcb_fd_t;
-
-typedef struct my_xcb_in_s {
-    pthread_cond_t event_cond;
-    int reading;
-    char queue[4096];
-    int queue_len;
-    uint64_t request_expected;
-    uint64_t request_read;
-    uint64_t request_completed;
-    struct reply_list *current_reply;
-    struct reply_list **current_reply_tail;
-    void*  replies;
-    struct event_list *events;
-    struct event_list **events_tail;
-    struct reader_list *readers;
-    struct special_list *special_waiters;
-    struct pending_reply *pending_replies;
-    struct pending_reply **pending_replies_tail;
-    my_xcb_fd_t in_fd;
-    struct xcb_special_event *special_events;
-} my_xcb_in_t;
-
-typedef struct x64_xcb_out_s {
-    pthread_cond_t cond;
-    int writing;
-    pthread_cond_t socket_cond;
-    void (*return_socket)(void *closure);
-    void *socket_closure;
-    int socket_moving;
-    char queue[16384];
-    int queue_len;
-    uint64_t request;
-    uint64_t request_written;
-    uint8_t reqlenlock[40];
-    int maximum_request_length_tag;
-    uint32_t maximum_request_length;
-    my_xcb_fd_t out_fd;
-} x64_xcb_out_t;
-
-typedef struct my_xcb_out_s {
-    pthread_cond_t cond;
-    int writing;
-    pthread_cond_t socket_cond;
-    void (*return_socket)(void *closure);
-    void *socket_closure;
-    int socket_moving;
-    char queue[16384];
-    int queue_len;
-    uint64_t request;
-    uint64_t request_written;
-    pthread_mutex_t reqlenlock;
-    int maximum_request_length_tag;
-    uint32_t maximum_request_length;
-    my_xcb_fd_t out_fd;
-} my_xcb_out_t;
-
-typedef struct my_xcb_connection_s {
-    int has_error;
-    void *setup;
-    int fd;
-    pthread_mutex_t iolock;
-    my_xcb_in_t in;
-    my_xcb_out_t out;
-    my_xcb_ext_t ext;
-    my_xcb_xid_t xid;
-} my_xcb_connection_t;
-
-typedef struct x64_xcb_connection_s {
-    int has_error;
-    void *setup;
-    int fd;
-    uint8_t iolock[MUTEX_SIZE_X64];
-    my_xcb_in_t in;
-    x64_xcb_out_t out;
-    x64_xcb_ext_t ext;
-    x64_xcb_xid_t xid;
-} x64_xcb_connection_t;
+#include "my_xcb_defs.h"
 
 #define NXCB 8
-my_xcb_connection_t* my_xcb_connects[NXCB] = {0};
-x64_xcb_connection_t x64_xcb_connects[NXCB] = {0};
+static my_xcb_connection_t* my_xcb_connects[NXCB] = {0};
+static x64_xcb_connection_t x64_xcb_connects[NXCB] = {0};
 
 void* align_xcb_connection(void* src)
 {

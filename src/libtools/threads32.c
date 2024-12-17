@@ -449,6 +449,8 @@ kh_mapcond_t *mapcond = NULL;
 
 static pthread_cond_t* add_cond(void* cond)
 {
+	if(((uintptr_t)cond)&7==0)
+		return cond;
 	mutex_lock(&my_context->mutex_thread);
 	khint_t k;
 	int ret;
@@ -464,6 +466,8 @@ static pthread_cond_t* add_cond(void* cond)
 }
 static pthread_cond_t* get_cond(void* cond)
 {
+	if(((uintptr_t)cond)&7==0)
+		return cond;
 	pthread_cond_t* ret;
 	int r;
 	mutex_lock(&my_context->mutex_thread);
@@ -476,7 +480,8 @@ static pthread_cond_t* get_cond(void* cond)
 			k = kh_put(mapcond, mapcond, (uintptr_t)cond, &r);
 			kh_value(mapcond, k) = ret;
 			//*(ptr_t*)cond = to_ptrv(cond);
-			pthread_cond_init(ret, NULL);
+			//pthread_cond_init(ret, NULL);
+			memcpy(ret, cond, sizeof(pthread_cond_t));
 		} else
 			ret = kh_value(mapcond, k);
 	} else
@@ -486,6 +491,8 @@ static pthread_cond_t* get_cond(void* cond)
 }
 static void del_cond(void* cond)
 {
+	if(((uintptr_t)cond)&7==0)
+		return;
 	if(!mapcond)
 		return;
 	mutex_lock(&my_context->mutex_thread);
@@ -571,24 +578,28 @@ EXPORT int my32_pthread_cond_signal_old(x64emu_t* emu, pthread_cond_2_0_t* cond)
 
 EXPORT int my32_pthread_cond_timedwait_old(x64emu_t* emu, pthread_cond_2_0_t* cond, void* mutex, void* abstime)
 {
+	pthread_mutex_t* m = getAlignedMutex((pthread_mutex_t*)mutex);
 	pthread_cond_t * c = get_cond_old(cond);
-	return pthread_cond_timedwait(c, getAlignedMutex((pthread_mutex_t*)mutex), (const struct timespec*)abstime);
+	return pthread_cond_timedwait(c, m, (const struct timespec*)abstime);
 }
 EXPORT int my32_pthread_cond_wait_old(x64emu_t* emu, pthread_cond_2_0_t* cond, void* mutex)
 {
+	pthread_mutex_t* m = getAlignedMutex((pthread_mutex_t*)mutex);
 	pthread_cond_t * c = get_cond_old(cond);
-	return pthread_cond_wait(c, getAlignedMutex((pthread_mutex_t*)mutex));
+	return pthread_cond_wait(c, m);
 }
 
 EXPORT int my32_pthread_cond_timedwait(x64emu_t* emu, void* cond, void* mutex, void* abstime)
 {
+	pthread_mutex_t* m = getAlignedMutex((pthread_mutex_t*)mutex);
 	pthread_cond_t * c = get_cond(cond);
-	return pthread_cond_timedwait(c, getAlignedMutex((pthread_mutex_t*)mutex), (const struct timespec*)abstime);
+	return pthread_cond_timedwait(c, m, (const struct timespec*)abstime);
 }
 EXPORT int my32_pthread_cond_wait(x64emu_t* emu, void* cond, void* mutex)
 {
+	pthread_mutex_t* m = getAlignedMutex((pthread_mutex_t*)mutex);
 	pthread_cond_t * c = get_cond(cond);
-	return pthread_cond_wait(c, getAlignedMutex((pthread_mutex_t*)mutex));
+	return pthread_cond_wait(c, m);
 }
 
 EXPORT int my32_pthread_mutexattr_setkind_np(x64emu_t* emu, void* t, int kind)
@@ -820,15 +831,8 @@ EXPORT int my32_pthread_kill_old(x64emu_t* emu, void* thread, int sig)
 // TODO: find a better way for mutex. It should be possible to use the actual mutex most of the time, especially for simple ones
 // Having the mutex table behind a mutex is far from ideal!
 
-typedef struct fake_pthread_mutext_s {
-	int __lock;
-	unsigned int __count;
-  	int __owner;
-	int i386__kind;
-	int __kind;
-	ptr_t real_mutex;
-} fakse_phtread_mutex_t;
-#define KIND_SIGN	0xbad000
+#include "threads32.h"
+
 pthread_mutex_t* createNewMutex()
 {
 	pthread_mutex_t* ret = (pthread_mutex_t*)box_calloc(1, sizeof(pthread_mutex_t));
@@ -838,21 +842,42 @@ pthread_mutex_t* createNewMutex()
 // init = 1: get the mutex and init it with optione attr (attr will disallow native mutex)
 pthread_mutex_t* getAlignedMutex(pthread_mutex_t* m)
 {
-	fakse_phtread_mutex_t* fake = (fakse_phtread_mutex_t*)m;
-	if(fake->__kind==0) {
+	fake_phtread_mutex_t* fake = (fake_phtread_mutex_t*)m;
+	if(!fake->__lock && !fake->__count && !fake->__owner && !fake->__kind && !fake->i386__kind && !fake->real_mutex) {
+		printf_log(LOG_DEBUG, " (init t0) ", m);
+		fake->real_mutex = KIND_SIGN;
+	}
+	if(!fake->__lock && !fake->__count && !fake->__owner && !fake->__kind && fake->i386__kind==1 && !fake->real_mutex) {
+		// recusrive mutex should also work
+		printf_log(LOG_DEBUG, " (init t1) ", m);
+		fake->real_mutex = KIND_SIGN;
+		fake->__kind = 1;
+		fake->i386__kind = 0;
+	}
+	if(fake->real_mutex==KIND_SIGN) {
+		printf_log(LOG_DEBUG, " (t0: m=%p, l=%d) ", m, fake->__lock);
 		return m;	// type 0 can fit...
 	}
-	if(fake->__kind==KIND_SIGN)
+	if(fake->__kind==KIND_SIGN) {
+		printf_log(LOG_DEBUG, " (m=%p, l=%d) ", from_ptrv(fake->real_mutex), *(int*)from_ptrv(fake->real_mutex));
 		return from_ptrv(fake->real_mutex);
+	}
 	// this should not appens!
-	printf_log(LOG_NONE, "BOX32: Warning, fallback on alligned mutex %p\n", m);
+	printf_log(LOG_INFO, "BOX32: Warning, fallback on aligned mutex %p\n", m);
 	fake->real_mutex = to_ptrv(createNewMutex());
+	pthread_mutexattr_t attr = {0};
+	pthread_mutexattr_init(&attr);
+	pthread_mutexattr_settype(&attr, fake->i386__kind);
+	pthread_mutex_init(from_ptrv(fake->real_mutex), &attr);
+	pthread_mutexattr_destroy(&attr);
+	fake->__kind==KIND_SIGN;
+	printf_log(LOG_DEBUG, " (fb: m=%p) ", from_ptrv(fake->real_mutex));
 	return from_ptrv(fake->real_mutex);
 }
 EXPORT int my32_pthread_mutex_destroy(pthread_mutex_t *m)
 {
-	fakse_phtread_mutex_t* fake = (fakse_phtread_mutex_t*)m;
-	if(fake->__kind==0) {
+	fake_phtread_mutex_t* fake = (fake_phtread_mutex_t*)m;
+	if(fake->real_mutex==KIND_SIGN) {
 		//TODO: check if that save/restore is actually needed
 		uint8_t saved[sizeof(pthread_mutex_t)];
 		memcpy(saved, fake+1, sizeof(pthread_mutex_t)-24);
@@ -885,22 +910,27 @@ EXPORT int my32___pthread_mutex_destroy(pthread_mutex_t *m) __attribute__((alias
 
 EXPORT int my32_pthread_mutex_init(pthread_mutex_t *m, pthread_mutexattr_t *att)
 {
-	fakse_phtread_mutex_t* fake = (fakse_phtread_mutex_t*)m;
-	if(fake->__kind==0 && !att) {
+	fake_phtread_mutex_t* fake = (fake_phtread_mutex_t*)m;
+	if(!att) {
 		fake->__lock = 0;
 		fake->__count = 0;
 		fake->i386__kind = 0;
 		fake->__owner = 0;
+		fake->real_mutex = KIND_SIGN;
+		printf_log(LOG_DEBUG, " (init t0) ");
 		return 0;
 	}
-	if(fake->__kind==KIND_SIGN)
+	if(fake->__kind==KIND_SIGN) {
+		printf_log(LOG_DEBUG, "(reinit %p) ",from_ptrv(fake->real_mutex));
 		return pthread_mutex_init(from_ptrv(fake->real_mutex), att);
+	}
 	fake->__lock = 0;
 	fake->__count = 0;
 	fake->__kind = KIND_SIGN;
 	fake->real_mutex = to_ptrv(createNewMutex());
 	int ret = pthread_mutex_init(from_ptrv(fake->real_mutex), att);
 	fake->i386__kind = ((struct __pthread_mutex_s*)from_ptrv(fake->real_mutex))->__kind;
+	printf_log(LOG_DEBUG, "(init t%d %p) ", fake->i386__kind, from_ptrv(fake->real_mutex));
 	return ret;
 }
 EXPORT int my32___pthread_mutex_init(pthread_mutex_t *m, pthread_mutexattr_t *att) __attribute__((alias("my32_pthread_mutex_init")));

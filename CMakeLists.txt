@@ -39,8 +39,9 @@ option(BAD_SIGNAL "Set to ON to activate the workaround for incoherent si_info o
 option(SW64 "Set ON if targeting an SW64 based device" ${SW64})
 option(CI "Set to ON if running in CI" ${CI})
 option(WITH_MOLD "Set to ON to use with mold" ${WITH_MOLD})
-option(BOX32 "Set to ON to add Linux 32bits support (experimental, do not use)" ${BO64})
-option(BOX32_BINFMT "Also setup binfmt integration for box32" ${BO64_BINFMT})
+option(BOX32 "Set to ON to add Linux 32bits support (experimental, do not use)" ${BOX32})
+option(BOX32_BINFMT "Also setup binfmt integration for box32" ${BOX32_BINFMT})
+option(LARCH64_ABI_1 "Set to ON if building for Loongarch64 ABI 1.0 system" ${LARCH64_ABI_1})
 
 if(TERMUX)
     set(TERMUX_PATH "/data/data/com.termux/files")
@@ -52,6 +53,10 @@ if(LARCH64)
     set(ARM_DYNAREC OFF CACHE BOOL "")
     set(RV64_DYNAREC OFF CACHE BOOL "")
     set(LARCH64_DYNAREC ON CACHE BOOL "")
+    if(LARCH64_ABI_1)
+        message(STATUS "Build for Loongarch64 ABI 1.0 system")
+        add_definitions(-DLA64_ABI_1)
+    endif()
 endif()
 if(RV64)
     set(LD80BITS OFF CACHE BOOL "")
@@ -85,6 +90,7 @@ if(SW64)
     set(NOALIGN OFF CACHE BOOL "")
 endif()
 if(ANDROID)
+    set(TERMUX_PATH "/data/data/com.termux/files")
     set(NOLOADADDR ON CACHE BOOL "")
     set(BAD_SIGNAL ON CACHE BOOL "")
 endif()
@@ -266,6 +272,9 @@ endif()
 if(NOGIT)
     add_definitions(-DNOGIT)
 endif()
+if(CI)
+    add_definitions(-Wno-pointer-type-mismatch)
+endif()
 
 if(HAVE_TRACE)
     set(BOX64 box64)
@@ -371,6 +380,7 @@ set(ELFLOADER_SRC
     "${BOX64_ROOT}/src/libtools/auxval.c"
     "${BOX64_ROOT}/src/libtools/myalign.c"
     "${BOX64_ROOT}/src/libtools/signals.c"
+    "${BOX64_ROOT}/src/libtools/decopcode.c"
     "${BOX64_ROOT}/src/libtools/threads.c"
     "${BOX64_ROOT}/src/tools/bitutils.c"
     "${BOX64_ROOT}/src/tools/box64stack.c"
@@ -406,6 +416,7 @@ if(BOX32)
         "${BOX64_ROOT}/src/librarian/globalsymbols32.c"
         "${BOX64_ROOT}/src/libtools/myalign32.c"
         "${BOX64_ROOT}/src/libtools/myalign64_32.c"
+        "${BOX64_ROOT}/src/libtools/myalignxcb32.c"
         "${BOX64_ROOT}/src/libtools/signal32.c"
         "${BOX64_ROOT}/src/libtools/threads32.c"
         "${BOX64_ROOT}/src/libtools/libc_net32.c"
@@ -615,6 +626,7 @@ set(WRAPPEDS
     "${BOX64_ROOT}/src/wrapped/wrappedlibxcbrandr.c"
     "${BOX64_ROOT}/src/wrapped/wrappedlibxcbrender.c"
     "${BOX64_ROOT}/src/wrapped/wrappedlibxcbrenderutil.c"
+    "${BOX64_ROOT}/src/wrapped/wrappedlibxcbres.c"
     "${BOX64_ROOT}/src/wrapped/wrappedlibxcbshape.c"
     "${BOX64_ROOT}/src/wrapped/wrappedlibxcbshm.c"
     "${BOX64_ROOT}/src/wrapped/wrappedlibxcbsync.c"
@@ -811,6 +823,7 @@ if(BOX32)
         "${BOX64_ROOT}/src/wrapped32/wrappedfreetype.c"
         "${BOX64_ROOT}/src/wrapped32/wrappedfontconfig.c"
         "${BOX64_ROOT}/src/wrapped32/wrappedlibx11.c"
+        "${BOX64_ROOT}/src/wrapped32/wrappedlibxdamage.c"
         "${BOX64_ROOT}/src/wrapped32/wrappedlibxext.c"
         "${BOX64_ROOT}/src/wrapped32/wrappedlibxfixes.c"
         "${BOX64_ROOT}/src/wrapped32/wrappedlibxrender.c"
@@ -822,10 +835,17 @@ if(BOX32)
         "${BOX64_ROOT}/src/wrapped32/wrappedlibxxf86vm.c"
         "${BOX64_ROOT}/src/wrapped32/wrappedxinerama.c"
         "${BOX64_ROOT}/src/wrapped32/wrappedexpat.c"
+        "${BOX64_ROOT}/src/wrapped32/wrappedlibx11xcb.c"
+        "${BOX64_ROOT}/src/wrapped32/wrappedlibxcb.c"
+        #"${BOX64_ROOT}/src/wrapped32/wrappedlibxcbres.c"
         "${BOX64_ROOT}/src/wrapped32/wrappedudev0.c"
         "${BOX64_ROOT}/src/wrapped32/wrappedudev1.c"
         "${BOX64_ROOT}/src/wrapped32/wrappedlibuuid.c"
         "${BOX64_ROOT}/src/wrapped32/wrappedtcmallocminimal.c"
+        "${BOX64_ROOT}/src/wrapped32/wrappedcairo.c"
+        "${BOX64_ROOT}/src/wrapped32/wrappedlibdrm.c"
+        "${BOX64_ROOT}/src/wrapped32/wrappedlibvdpau.c"
+        "${BOX64_ROOT}/src/wrapped32/wrappednsl.c"
     )
     endif()
     string(REPLACE ".c" "_private.h" MODROOT ${BOX64_ROOT})
@@ -1172,23 +1192,23 @@ if(NOT _x86 AND NOT _x86_64)
   endif()
   set(INSTALL_PATH "/usr/lib/box64-x86_64-linux-gnu/")
   if(NOT NO_LIB_INSTALL)
-	if(NOT TERMUX)
-    		install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libstdc++.so.5 DESTINATION ${INSTALL_PATH})
-    		install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libstdc++.so.6 DESTINATION ${INSTALL_PATH})
-    		install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libgcc_s.so.1 DESTINATION ${INSTALL_PATH})
-    		install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libpng12.so.0 DESTINATION ${INSTALL_PATH})
-    		install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libcrypto.so.1.1 DESTINATION ${INSTALL_PATH})
-            install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libcrypto.so.1.0.0 DESTINATION ${INSTALL_PATH})
-    		install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libssl.so.1.1 DESTINATION ${INSTALL_PATH})
-            install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libssl.so.1.0.0 DESTINATION ${INSTALL_PATH})
-    		install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libunwind.so.8 DESTINATION ${INSTALL_PATH})
-            install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libmbedx509.so.1 DESTINATION ${INSTALL_PATH})
-            install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libmbedx509.so.0 DESTINATION ${INSTALL_PATH})
-            install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libmbedtls.so.14 DESTINATION ${INSTALL_PATH})
-            install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libmbedtls.so.12 DESTINATION ${INSTALL_PATH})
-            install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libmbedcrypto.so.7 DESTINATION ${INSTALL_PATH})
-            install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libmbedcrypto.so.3 DESTINATION ${INSTALL_PATH})
-	else()
+	if(NOT TERMUX AND NOT ANDROID)
+        install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libstdc++.so.5 DESTINATION ${INSTALL_PATH})
+        install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libstdc++.so.6 DESTINATION ${INSTALL_PATH})
+        install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libgcc_s.so.1 DESTINATION ${INSTALL_PATH})
+        install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libpng12.so.0 DESTINATION ${INSTALL_PATH})
+        install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libcrypto.so.1.1 DESTINATION ${INSTALL_PATH})
+        install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libcrypto.so.1.0.0 DESTINATION ${INSTALL_PATH})
+        install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libssl.so.1.1 DESTINATION ${INSTALL_PATH})
+        install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libssl.so.1.0.0 DESTINATION ${INSTALL_PATH})
+        install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libunwind.so.8 DESTINATION ${INSTALL_PATH})
+        install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libmbedx509.so.1 DESTINATION ${INSTALL_PATH})
+        install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libmbedx509.so.0 DESTINATION ${INSTALL_PATH})
+        install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libmbedtls.so.14 DESTINATION ${INSTALL_PATH})
+        install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libmbedtls.so.12 DESTINATION ${INSTALL_PATH})
+        install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libmbedcrypto.so.7 DESTINATION ${INSTALL_PATH})
+        install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libmbedcrypto.so.3 DESTINATION ${INSTALL_PATH})
+	elseif(TERMUX)
 		install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libstdc++.so.5 DESTINATION ${TERMUX_PATH}${INSTALL_PATH})
 		install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libstdc++.so.6 DESTINATION ${TERMUX_PATH}${INSTALL_PATH})
 		install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libgcc_s.so.1 DESTINATION ${TERMUX_PATH}${INSTALL_PATH})
@@ -1204,12 +1224,14 @@ if(NOT _x86 AND NOT _x86_64)
         install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libmbedtls.so.12 DESTINATION ${TERMUX_PATH}${INSTALL_PATH})
         install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libmbedcrypto.so.7 DESTINATION ${TERMUX_PATH}${INSTALL_PATH})
         install(FILES ${CMAKE_SOURCE_DIR}/x64lib/libmbedcrypto.so.3 DESTINATION ${TERMUX_PATH}${INSTALL_PATH})
+    elseif(ANDROID)
+    install(FILES ${CMAKE_SOURCE_DIR}/x64android/libc++_shared.so DESTINATION ${TERMUX_PATH}${INSTALL_PATH})
 	endif()
    endif()
    if(BOX32)
     set(INSTALL_PATH "/usr/lib/box64-i386-linux-gnu/")
     if(NOT NO_LIB_INSTALL)
-    	if(NOT TERMUX)
+    	if(NOT TERMUX AND NOT ANDROID)
     		install(FILES ${CMAKE_SOURCE_DIR}/x86lib/libstdc++.so.5 DESTINATION ${INSTALL_PATH})
     		install(FILES ${CMAKE_SOURCE_DIR}/x86lib/libstdc++.so.6 DESTINATION ${INSTALL_PATH})
     		install(FILES ${CMAKE_SOURCE_DIR}/x86lib/libgcc_s.so.1 DESTINATION ${INSTALL_PATH})
@@ -1218,7 +1240,7 @@ if(NOT _x86 AND NOT _x86_64)
             install(FILES ${CMAKE_SOURCE_DIR}/x86lib/libcrypto.so.1.0.0 DESTINATION ${INSTALL_PATH})
             install(FILES ${CMAKE_SOURCE_DIR}/x86lib/libssl.so.1.0.0 DESTINATION ${INSTALL_PATH})
             install(FILES ${CMAKE_SOURCE_DIR}/x86lib/libz.so.1 DESTINATION ${INSTALL_PATH})
-        else()
+        elseif(TERMUX)
             install(FILES ${CMAKE_SOURCE_DIR}/x86lib/libstdc++.so.5 DESTINATION ${TERMUX_PATH}${INSTALL_PATH})
             install(FILES ${CMAKE_SOURCE_DIR}/x86lib/libstdc++.so.6 DESTINATION ${TERMUX_PATH}${INSTALL_PATH})
             install(FILES ${CMAKE_SOURCE_DIR}/x86lib/libgcc_s.so.1 DESTINATION ${TERMUX_PATH}${INSTALL_PATH})
@@ -1227,6 +1249,8 @@ if(NOT _x86 AND NOT _x86_64)
             install(FILES ${CMAKE_SOURCE_DIR}/x86lib/libcrypto.so.1.0.0 DESTINATION ${TERMUX_PATH}${INSTALL_PATH})
             install(FILES ${CMAKE_SOURCE_DIR}/x86lib/libssl.so.1.0.0 DESTINATION ${TERMUX_PATH}${INSTALL_PATH})
             install(FILES ${CMAKE_SOURCE_DIR}/x86lib/libz.so.1 DESTINATION ${TERMUX_PATH}${INSTALL_PATH})
+        elseif(ANDROID)
+            install(FILES ${CMAKE_SOURCE_DIR}/x86android/libc++_shared.so DESTINATION ${TERMUX_PATH}${INSTALL_PATH})
        endif()
     endif()
   endif()
@@ -1485,10 +1509,10 @@ add_test(threadsStart ${CMAKE_COMMAND} -D TEST_PROGRAM=${CMAKE_BINARY_DIR}/${BOX
     -D TEST_REFERENCE=${CMAKE_SOURCE_DIR}/tests/ref06.txt
     -P ${CMAKE_SOURCE_DIR}/runTest.cmake )
 
-#add_test(trig ${CMAKE_COMMAND} -D TEST_PROGRAM=${CMAKE_BINARY_DIR}/${BOX64}
-#    -D TEST_ARGS=${CMAKE_SOURCE_DIR}/tests/test07_android -D TEST_OUTPUT=tmpfile07.txt
-#    -D TEST_REFERENCE=${CMAKE_SOURCE_DIR}/tests/ref07.txt
-#    -P ${CMAKE_SOURCE_DIR}/runTest.cmake )
+add_test(trig ${CMAKE_COMMAND} -D TEST_PROGRAM=${CMAKE_BINARY_DIR}/${BOX64}
+    -D TEST_ARGS=${CMAKE_SOURCE_DIR}/tests/test07_android -D TEST_OUTPUT=tmpfile07.txt
+    -D TEST_REFERENCE=${CMAKE_SOURCE_DIR}/tests/ref07.txt
+    -P ${CMAKE_SOURCE_DIR}/runTest.cmake )
 
 add_test(pi ${CMAKE_COMMAND} -D TEST_PROGRAM=${CMAKE_BINARY_DIR}/${BOX64}
     -D TEST_ARGS=${CMAKE_SOURCE_DIR}/tests/test08_android -D TEST_OUTPUT=tmpfile08.txt

@@ -56,7 +56,7 @@ uint8_t flag2native(uint8_t flags);
 // mark a instruction as using/generating flags. return flag
 uint8_t mark_natflag(dynarec_arm_t* dyn, int ninst, uint8_t flag, int before);
 // propage the use of nativeflags or not (done between step 0 and step 1)
-void updateNatveFlags(dynarec_arm_t* dyn);
+void updateNativeFlags(dynarec_arm_t* dyn);
 // raz arm speicifc state when an opcode is unused
 void rasNativeState(dynarec_arm_t* dyn, int ninst);
 // check if natives flags needs some tranform to/from x86 flags
@@ -67,6 +67,9 @@ int fpuCacheNeedsTransform(dynarec_arm_t* dyn, int ninst);
 
 // Undo the changes of a neoncache to get the status before the instruction
 void neoncacheUnwind(neoncache_t* cache);
+void fpu_save_and_unwind(dynarec_arm_t* dyn, int ninst, neoncache_t* cache);
+void fpu_unwind_restore(dynarec_arm_t* dyn, int ninst, neoncache_t* cache);
+
 
 // Get if ED will have the correct parity. Not emitting anything. Parity is 2 for DWORD or 3 for QWORD
 int getedparity(dynarec_native_t* dyn, int ninst, uintptr_t addr, uint8_t nextop, int parity, int delta);

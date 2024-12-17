@@ -1,106 +1,9 @@
 #ifndef __RV64_EMITTER_H__
 #define __RV64_EMITTER_H__
-/*
-    RV64 Emitter
 
-*/
+#include "rv64_mapping.h"
 
-// RV64 ABI
-/*
-reg     name    description                     saver
-------------------------------------------------------
-x0      zero    Hard-wired zero                 —
-x1      ra      Return address                  Caller
-x2      sp      Stack pointer                   Callee
-x3      gp      Global pointer                  —
-x4      tp      Thread pointer                  —
-x5–7    t0–2    Temporaries                     Caller
-x8      s0/fp   Saved register/frame pointer    Callee
-x9      s1      Saved register                  Callee
-x10–11  a0–1    Function arguments/return val.  Caller
-x12–17  a2–7    Function arguments              Caller
-x18–27  s2–11   Saved registers                 Callee
-x28–31  t3–6    Temporaries                     Caller
--------------------------------------------------------
-f0–7    ft0–7   FP temporaries                  Caller
-f8–9    fs0–1   FP saved registers              Callee
-f10–11  fa0–1   FP arguments/return values      Caller
-f12–17  fa2–7   FP arguments                    Caller
-f18–27  fs2–11  FP saved registers              Callee
-f28–31  ft8–11  FP temporaries                  Caller
-*/
-// x86 Register mapping
-#define xRAX   16
-#define xRCX   17
-#define xRDX   18
-#define xRBX   19
-#define xRSP   20
-#define xRBP   21
-#define xRSI   22
-#define xRDI   23
-#define xR8    24
-#define xR9    25
-#define xR10   26
-#define xR11   27
-#define xR12   28
-#define xR13   29
-#define xR14   30
-#define xR15   31
-#define xFlags 8
-#define xRIP   7
-
-// 32bits version
-#define wEAX   xRAX
-#define wECX   xRCX
-#define wEDX   xRDX
-#define wEBX   xRBX
-#define wESP   xRSP
-#define wEBP   xRBP
-#define wESI   xRSI
-#define wEDI   xRDI
-#define wR8    xR8
-#define wR9    xR9
-#define wR10   xR10
-#define wR11   xR11
-#define wR12   xR12
-#define wR13   xR13
-#define wR14   xR14
-#define wR15   xR15
-#define wFlags xFlags
-// scratch registers
-#define x1 11
-#define x2 12
-#define x3 13
-#define x4 14
-#define x5 15
-#define x6 6
-#define x9 9
-// used to clear the upper 32bits
-#define xMASK 5
-// 32bits version of scratch
-#define w1 x1
-#define w2 x2
-#define w3 x3
-#define w4 x4
-#define w5 x5
-#define w6 x6
-// emu is r10
-#define xEmu 10
-// RV64 RA
-#define xRA 1
-#define xSP 2
-// RV64 args
-#define A0 10
-#define A1 11
-#define A2 12
-#define A3 13
-#define A4 14
-#define A5 15
-#define A6 16
-#define A7 17
-// xZR reg is 0
-#define xZR 0
-#define wZR xZR
+// RV64 Emitter
 
 // replacement for F_OF internaly, using a reserved bit. Need to use F_OF2 internaly, never F_OF directly!
 #define F_OF2 F_res3
@@ -112,21 +15,36 @@ f28–31  ft8–11  FP temporaries                  Caller
 // MOV64x/MOV32w is quite complex, so use a function for this
 #define MOV64x(A, B) rv64_move64(dyn, ninst, A, B)
 #define MOV32w(A, B) rv64_move32(dyn, ninst, A, B, 1)
-#define MOV64xw(A, B) do { \
-    if (rex.w) {      \
-        MOV64x(A, B); \
-    } else {          \
-        MOV32w(A, B); \
-    } } while (0)
-#define MOV64z(A, B) do { \
-    if (rex.is32bits) { \
-        MOV32w(A, B);   \
-    } else {            \
-        MOV64x(A, B);   \
-    } } while (0)
+#define MOV64xw(A, B)     \
+    do {                  \
+        if (rex.w) {      \
+            MOV64x(A, B); \
+        } else {          \
+            MOV32w(A, B); \
+        }                 \
+    } while (0)
+#define MOV64z(A, B)        \
+    do {                    \
+        if (rex.is32bits) { \
+            MOV32w(A, B);   \
+        } else {            \
+            MOV64x(A, B);   \
+        }                   \
+    } while (0)
 
-// ZERO the upper part
-#define ZEROUP(r) AND(r, r, xMASK)
+// ZERO the upper part, compatible to zba, xtheadbb, and rv64gc
+#define ZEXTW2(rd, rs1)              \
+    do {                             \
+        if (rv64_zba) {              \
+            ZEXTW(rd, rs1);          \
+        } else if (rv64_xtheadbb) {  \
+            TH_EXTU(rd, rs1, 31, 0); \
+        } else {                     \
+            SLLI(rd, rs1, 32);       \
+            SRLI(rd, rd, 32);        \
+        }                            \
+    } while (0)
+#define ZEROUP(r) ZEXTW2(r, r)
 
 #define R_type(funct7, rs2, rs1, funct3, rd, opcode) ((funct7) << 25 | (rs2) << 20 | (rs1) << 15 | (funct3) << 12 | (rd) << 7 | (opcode))
 #define I_type(imm12, rs1, funct3, rd, opcode)       ((imm12) << 20 | (rs1) << 15 | (funct3) << 12 | (rd) << 7 | (opcode))
@@ -233,19 +151,23 @@ f28–31  ft8–11  FP temporaries                  Caller
 // rd = rs1 (pseudo instruction)
 #define MV(rd, rs1) ADDI(rd, rs1, 0)
 // rd = rs1 (pseudo instruction)
-#define MVxw(rd, rs1) do {   \
-    if (rex.w) {             \
-        MV(rd, rs1);         \
-    } else {                 \
-        AND(rd, rs1, xMASK); \
-    } } while (0)
+#define MVxw(rd, rs1)            \
+    do {                         \
+        if (rex.w) {             \
+            MV(rd, rs1);         \
+        } else {                 \
+            ZEXTW2(rd, rs1);     \
+        }                        \
+    } while (0)
 // rd = rs1 (pseudo instruction)
-#define MVz(rd, rs1) do {    \
-    if (rex.is32bits) {      \
-        AND(rd, rs1, xMASK); \
-    } else {                 \
-        MV(rd, rs1);         \
-    } } while (0)
+#define MVz(rd, rs1)             \
+    do {                         \
+        if (rex.is32bits) {      \
+            ZEXTW2(rd, rs1);     \
+        } else {                 \
+            MV(rd, rs1);         \
+        }                        \
+    } while (0)
 // rd = !rs1
 #define NOT(rd, rs1) XORI(rd, rs1, -1)
 // rd = -rs1
@@ -265,7 +187,11 @@ f28–31  ft8–11  FP temporaries                  Caller
 #define BLTU(rs1, rs2, imm13) EMIT(B_type(imm13, rs2, rs1, 0b110, 0b1100011))
 #define BGEU(rs1, rs2, imm13) EMIT(B_type(imm13, rs2, rs1, 0b111, 0b1100011))
 
-// TODO: Find a better way to have conditionnal jumps? Imm is a relative jump address, so the the 2nd jump needs to be adapted
+#define BGT(rs1, rs2, imm13)  BLT(rs2, rs1, imm13)
+#define BLE(rs1, rs2, imm13)  BGE(rs2, rs1, imm13)
+#define BGTU(rs1, rs2, imm13) BLTU(rs2, rs1, imm13)
+#define BLEU(rs1, rs2, imm13) BGEU(rs2, rs1, imm13)
+
 #define BEQ_safe(rs1, rs2, imm)              \
     if ((imm) > -0x1000 && (imm) < 0x1000) { \
         BEQ(rs1, rs2, imm);                  \
@@ -287,7 +213,7 @@ f28–31  ft8–11  FP temporaries                  Caller
         BLT(rs1, rs2, imm);                  \
         NOP();                               \
     } else {                                 \
-        BGE(rs2, rs1, 8);                    \
+        BGE(rs1, rs2, 8);                    \
         B(imm - 4);                          \
     }
 #define BGE_safe(rs1, rs2, imm)              \
@@ -295,7 +221,7 @@ f28–31  ft8–11  FP temporaries                  Caller
         BGE(rs1, rs2, imm);                  \
         NOP();                               \
     } else {                                 \
-        BLT(rs2, rs1, 8);                    \
+        BLT(rs1, rs2, 8);                    \
         B(imm - 4);                          \
     }
 #define BLTU_safe(rs1, rs2, imm)             \
@@ -303,7 +229,7 @@ f28–31  ft8–11  FP temporaries                  Caller
         BLTU(rs1, rs2, imm);                 \
         NOP();                               \
     } else {                                 \
-        BGEU(rs2, rs1, 8);                   \
+        BGEU(rs1, rs2, 8);                   \
         B(imm - 4);                          \
     }
 #define BGEU_safe(rs1, rs2, imm)             \
@@ -311,7 +237,39 @@ f28–31  ft8–11  FP temporaries                  Caller
         BGEU(rs1, rs2, imm);                 \
         NOP();                               \
     } else {                                 \
-        BLTU(rs2, rs1, 8);                   \
+        BLTU(rs1, rs2, 8);                   \
+        B(imm - 4);                          \
+    }
+#define BGT_safe(rs1, rs2, imm)              \
+    if ((imm) > -0x1000 && (imm) < 0x1000) { \
+        BGT(rs1, rs2, imm);                  \
+        NOP();                               \
+    } else {                                 \
+        BLE(rs1, rs2, 8);                    \
+        B(imm - 4);                          \
+    }
+#define BLE_safe(rs1, rs2, imm)              \
+    if ((imm) > -0x1000 && (imm) < 0x1000) { \
+        BLE(rs1, rs2, imm);                  \
+        NOP();                               \
+    } else {                                 \
+        BGT(rs1, rs2, 8);                    \
+        B(imm - 4);                          \
+    }
+#define BGTU_safe(rs1, rs2, imm)             \
+    if ((imm) > -0x1000 && (imm) < 0x1000) { \
+        BGTU(rs1, rs2, imm);                 \
+        NOP();                               \
+    } else {                                 \
+        BLEU(rs1, rs2, 8);                   \
+        B(imm - 4);                          \
+    }
+#define BLEU_safe(rs1, rs2, imm)             \
+    if ((imm) > -0x1000 && (imm) < 0x1000) { \
+        BLEU(rs1, rs2, imm);                 \
+        NOP();                               \
+    } else {                                 \
+        BGTU(rs1, rs2, 8);                   \
         B(imm - 4);                          \
     }
 
@@ -352,25 +310,41 @@ f28–31  ft8–11  FP temporaries                  Caller
 // 4-bytes[rs1+imm12] = rs2
 #define SW(rs2, rs1, imm12) EMIT(S_type(imm12, rs2, rs1, 0b010, 0b0100011))
 
-#define PUSH1(reg)            \
-    do {                      \
-        SD(reg, xRSP, 0xFF8); \
-        SUBI(xRSP, xRSP, 8);  \
+#define PUSH1(reg)                              \
+    do {                                        \
+        if (rv64_xtheadmemidx && reg != xRSP) { \
+            TH_SDIB(reg, xRSP, -8, 0);          \
+        } else {                                \
+            SD(reg, xRSP, 0xFF8);               \
+            SUBI(xRSP, xRSP, 8);                \
+        }                                       \
     } while (0)
-#define POP1(reg)                             \
-    do {                                      \
-        LD(reg, xRSP, 0);                     \
-        if (reg != xRSP) ADDI(xRSP, xRSP, 8); \
+#define POP1(reg)                                 \
+    do {                                          \
+        if (rv64_xtheadmemidx && reg != xRSP) {   \
+            TH_LDIA(reg, xRSP, 8, 0);             \
+        } else {                                  \
+            LD(reg, xRSP, 0);                     \
+            if (reg != xRSP) ADDI(xRSP, xRSP, 8); \
+        }                                         \
     } while (0)
-#define PUSH1_32(reg)         \
-    do {                      \
-        SW(reg, xRSP, 0xFFC); \
-        SUBI(xRSP, xRSP, 4);  \
+#define PUSH1_32(reg)                           \
+    do {                                        \
+        if (rv64_xtheadmemidx && reg != xRSP) { \
+            TH_SWIB(reg, xRSP, -4, 0);          \
+        } else {                                \
+            SW(reg, xRSP, 0xFFC);               \
+            SUBI(xRSP, xRSP, 4);                \
+        }                                       \
     } while (0)
-#define POP1_32(reg)                          \
-    do {                                      \
-        LWU(reg, xRSP, 0);                    \
-        if (reg != xRSP) ADDI(xRSP, xRSP, 4); \
+#define POP1_32(reg)                              \
+    do {                                          \
+        if (rv64_xtheadmemidx && reg != xRSP) {   \
+            TH_LWUIA(reg, xRSP, 4, 0);            \
+        } else {                                  \
+            LWU(reg, xRSP, 0);                    \
+            if (reg != xRSP) ADDI(xRSP, xRSP, 4); \
+        }                                         \
     } while (0)
 
 #define POP1z(reg)      \
@@ -386,16 +360,24 @@ f28–31  ft8–11  FP temporaries                  Caller
         PUSH1(reg);     \
     }
 
-#define PUSH1_16(reg)         \
-    do {                      \
-        SH(reg, xRSP, 0xFFE); \
-        SUBI(xRSP, xRSP, 2);  \
+#define PUSH1_16(reg)                           \
+    do {                                        \
+        if (rv64_xtheadmemidx && reg != xRSP) { \
+            TH_SHIB(reg, xRSP, -2, 0);          \
+        } else {                                \
+            SH(reg, xRSP, 0xFFE);               \
+            SUBI(xRSP, xRSP, 2);                \
+        }                                       \
     } while (0)
 
-#define POP1_16(reg)                          \
-    do {                                      \
-        LHU(reg, xRSP, 0);                    \
-        if (reg != xRSP) ADDI(xRSP, xRSP, 2); \
+#define POP1_16(reg)                              \
+    do {                                          \
+        if (rv64_xtheadmemidx && reg != xRSP) {   \
+            TH_LHUIA(reg, xRSP, 2, 0);            \
+        } else {                                  \
+            LHU(reg, xRSP, 0);                    \
+            if (reg != xRSP) ADDI(xRSP, xRSP, 2); \
+        }                                         \
     } while (0)
 
 #define FENCE_gen(pred, succ) (((pred) << 24) | ((succ) << 20) | 0b0001111)
@@ -466,60 +448,72 @@ f28–31  ft8–11  FP temporaries                  Caller
 // rd = rs1>>rs2 arithmetic
 #define SRAW(rd, rs1, rs2) EMIT(R_type(0b0100000, rs2, rs1, 0b101, rd, 0b0111011))
 
-#define SLLxw(rd, rs1, rs2) do { \
-    if (rex.w) {                 \
-        SLL(rd, rs1, rs2);       \
-    } else {                     \
-        SLLW(rd, rs1, rs2);      \
-        ZEROUP(rd);              \
-    } } while (0)
+#define SLLxw(rd, rs1, rs2)     \
+    do {                        \
+        if (rex.w) {            \
+            SLL(rd, rs1, rs2);  \
+        } else {                \
+            SLLW(rd, rs1, rs2); \
+            ZEROUP(rd);         \
+        }                       \
+    } while (0)
 
-#define SRLxw(rd, rs1, rs2) do { \
-    if (rex.w) {                 \
-        SRL(rd, rs1, rs2);       \
-    } else {                     \
-        SRLW(rd, rs1, rs2);      \
-        ZEROUP(rd);              \
-    } } while (0)
+#define SRLxw(rd, rs1, rs2)     \
+    do {                        \
+        if (rex.w) {            \
+            SRL(rd, rs1, rs2);  \
+        } else {                \
+            SRLW(rd, rs1, rs2); \
+            ZEROUP(rd);         \
+        }                       \
+    } while (0)
 
-#define SRAxw(rd, rs1, rs2) do { \
-    if (rex.w) {                 \
-        SRA(rd, rs1, rs2);       \
-    } else {                     \
-        SRAW(rd, rs1, rs2);      \
-        ZEROUP(rd);              \
-    } } while (0)
+#define SRAxw(rd, rs1, rs2)     \
+    do {                        \
+        if (rex.w) {            \
+            SRA(rd, rs1, rs2);  \
+        } else {                \
+            SRAW(rd, rs1, rs2); \
+            ZEROUP(rd);         \
+        }                       \
+    } while (0)
 
 // Shift Left Immediate, 32-bit, sign-extended
 #define SLLIW(rd, rs1, imm5) EMIT(I_type(imm5, rs1, 0b001, rd, 0b0011011))
 // Shift Left Immediate
-#define SLLIxw(rd, rs1, imm) do { \
-    if (rex.w) {                  \
-        SLLI(rd, rs1, imm);       \
-    } else {                      \
-        SLLIW(rd, rs1, imm);      \
-        ZEROUP(rd);               \
-    } } while (0)
+#define SLLIxw(rd, rs1, imm)     \
+    do {                         \
+        if (rex.w) {             \
+            SLLI(rd, rs1, imm);  \
+        } else {                 \
+            SLLIW(rd, rs1, imm); \
+            ZEROUP(rd);          \
+        }                        \
+    } while (0)
 // Shift Right Logical Immediate, 32-bit, sign-extended
 #define SRLIW(rd, rs1, imm5) EMIT(I_type(imm5, rs1, 0b101, rd, 0b0011011))
 // Shift Right Logical Immediate
-#define SRLIxw(rd, rs1, imm) do {   \
-    if (rex.w) {                    \
-        SRLI(rd, rs1, imm);         \
-    } else {                        \
-        SRLIW(rd, rs1, imm);        \
-        if ((imm) == 0) ZEROUP(rd); \
-    } } while (0)
+#define SRLIxw(rd, rs1, imm)            \
+    do {                                \
+        if (rex.w) {                    \
+            SRLI(rd, rs1, imm);         \
+        } else {                        \
+            SRLIW(rd, rs1, imm);        \
+            if ((imm) == 0) ZEROUP(rd); \
+        }                               \
+    } while (0)
 // Shift Right Arithmetic Immediate, 32-bit, sign-extended
 #define SRAIW(rd, rs1, imm5) EMIT(I_type((imm5) | (0b0100000 << 5), rs1, 0b101, rd, 0b0011011))
 // Shift Right Arithmetic Immediate
-#define SRAIxw(rd, rs1, imm) do { \
-    if (rex.w) {                  \
-        SRAI(rd, rs1, imm);       \
-    } else {                      \
-        SRAIW(rd, rs1, imm);      \
-        ZEROUP(rd);               \
-    } } while (0)
+#define SRAIxw(rd, rs1, imm)     \
+    do {                         \
+        if (rex.w) {             \
+            SRAI(rd, rs1, imm);  \
+        } else {                 \
+            SRAIW(rd, rs1, imm); \
+            ZEROUP(rd);          \
+        }                        \
+    } while (0)
 
 #define CSRRW(rd, rs1, csr)  EMIT(I_type(csr, rs1, 0b001, rd, 0b1110011))
 #define CSRRS(rd, rs1, csr)  EMIT(I_type(csr, rs1, 0b010, rd, 0b1110011))
@@ -801,7 +795,7 @@ f28–31  ft8–11  FP temporaries                  Caller
             SUBI(u8, u8, 32);                \
             MV(s2, s3);                      \
         } else {                             \
-            AND(s2, rs, xMASK);              \
+            ZEXTW2(s2, rs);                  \
         }                                    \
         SRLI(s3, s2, 16);                    \
         BEQZ(s3, 4 + 2 * 4);                 \
@@ -897,7 +891,7 @@ f28–31  ft8–11  FP temporaries                  Caller
 // Insert low 16bits in rs to low 16bits of rd
 #define INSHz(rd, rs, s1, s2, init_s1, zexth_rs) \
     INSH(rd, rs, s1, s2, init_s1, zexth_rs)      \
-    if (rex.is32bits) AND(rd, rd, xMASK);
+    if (rex.is32bits) ZEXTW2(rd, rd);
 
 // Rotate left (register)
 #define ROL(rd, rs1, rs2) EMIT(R_type(0b0110000, rs2, rs1, 0b001, rd, 0b0110011))
@@ -980,7 +974,7 @@ f28–31  ft8–11  FP temporaries                  Caller
         }                              \
     }                                  \
     if (!rex.w)                        \
-        AND(rd, rd, xMASK);
+        ZEXTW2(rd, rd);
 
 
 // Zbc
@@ -1136,19 +1130,66 @@ f28–31  ft8–11  FP temporaries                  Caller
 // rs1 := rs1 + (sign_extend(imm5) << imm2)
 #define TH_LBIA(rd, rs1, imm5, imm2) EMIT(I_type(0b000110000000 | (((imm2) & 0b11) << 5) | ((imm5) & 0x1f), rs1, 0b100, rd, 0b0001011))
 
+// Load indexed half-word, increment address after loading.
+// if (rs1 != rd) {
+//     rd := sign_extend(mem[rs1+1:rs1])
+//     rs1 := rs1 + (sign_extend(imm5) << imm2)
+// }
+#define TH_LHIA(rd, rs1, imm5, imm2) EMIT(I_type(0b001110000000 | (((imm2) & 0b11) << 5) | ((imm5) & 0x1f), rs1, 0b100, rd, 0b0001011))
+
+// Load indexed unsigned half-word, increment address after loading.
+// if (rs1 != rd) {
+//     rd := zero_extend(mem[rs1+1:rs1])
+//     rs1 := rs1 + (sign_extend(imm5) << imm2)
+// }
+#define TH_LHUIA(rd, rs1, imm5, imm2) EMIT(I_type(0b101110000000 | (((imm2) & 0b11) << 5) | ((imm5) & 0x1f), rs1, 0b100, rd, 0b0001011))
+
+// Load indexed word, increment address after loading.
+// if (rs1 != rd) {
+//     rd := sign_extend(mem[rs1+3:rs1])
+//     rs1 := rs1 + (sign_extend(imm5) << imm2)
+// }
+#define TH_LWIA(rd, rs1, imm5, imm2) EMIT(I_type(0b010110000000 | (((imm2) & 0b11) << 5) | ((imm5) & 0x1f), rs1, 0b100, rd, 0b0001011))
+
+// Load indexed unsigned word, increment address after loading.
+// if (rs1 != rd) {
+//     rd := zero_extend(mem[rs1+3:rs1])
+//     rs1 := rs1 + (sign_extend(imm5) << imm2)
+// }
+#define TH_LWUIA(rd, rs1, imm5, imm2) EMIT(I_type(0b110110000000 | (((imm2) & 0b11) << 5) | ((imm5) & 0x1f), rs1, 0b100, rd, 0b0001011))
+
+// Load indexed double-word, increment address after loading.
+// if (rs1 != rd) {
+//     rd := sign_extend(mem[rs1+7:rs1])
+//     rs1 := rs1 + (sign_extend(imm5) << imm2)
+// }
+#define TH_LDIA(rd, rs1, imm5, imm2) EMIT(I_type(0b011110000000 | (((imm2) & 0b11) << 5) | ((imm5) & 0x1f), rs1, 0b100, rd, 0b0001011))
+
+// Store indexed half-word, increment address before storage.
+// rs1 := rs1 + (sign_extend(imm5) << imm2)
+// mem[rs1+1:rs1] := rd
+#define TH_SHIB(rd, rs1, imm5, imm2) EMIT(I_type(0b001010000000 | (((imm2) & 0b11) << 5) | ((imm5) & 0x1f), rs1, 0b101, rd, 0b0001011))
+
+// Store indexed word, increment address before storage.
+// rs1 := rs1 + (sign_extend(imm5) << imm2)
+// mem[rs1+3:rs1] := rd
+#define TH_SWIB(rd, rs1, imm5, imm2) EMIT(I_type(0b010010000000 | (((imm2) & 0b11) << 5) | ((imm5) & 0x1f), rs1, 0b101, rd, 0b0001011))
+
+// Store indexed double-word, increment address before storage.
+// rs1 := rs1 + (sign_extend(imm5) << imm2)
+// mem[rs1+7:rs1] := rd
+#define TH_SDIB(rd, rs1, imm5, imm2) EMIT(I_type(0b011010000000 | (((imm2) & 0b11) << 5) | ((imm5) & 0x1f), rs1, 0b101, rd, 0b0001011))
+
 // TODO
 // th.lbib rd, (rs1), imm5, imm2 Load indexed byte
 // th.lbuia rd, (rs1), imm5, imm2 Load indexed unsigned byte
 // th.lbuib rd, (rs1), imm5, imm2 Load indexed unsigned byte
 // th.lhia rd, (rs1), imm5, imm2 Load indexed half-word
 // th.lhib rd, (rs1), imm5, imm2 Load indexed half-word
-// th.lhuia rd, (rs1), imm5, imm2 Load indexed unsigned half-word
 // th.lhuib rd, (rs1), imm5, imm2 Load indexed unsigned half-word
 // th.lwia rd, (rs1), imm5, imm2 Load indexed word
 // th.lwib rd, (rs1), imm5, imm2 Load indexed word
-// th.lwuia rd, (rs1), imm5, imm2 Load indexed unsigned word
 // th.lwuib rd, (rs1), imm5, imm2 Load indexed unsigned word
-// th.ldia rd, (rs1), imm5, imm2 Load indexed double-word
 // th.ldib rd, (rs1), imm5, imm2 Load indexed double-word
 // th.sbia rd, (rs1), imm5, imm2 Store indexed byte
 // th.sbib rd, (rs1), imm5, imm2 Store indexed byte
@@ -1157,7 +1198,6 @@ f28–31  ft8–11  FP temporaries                  Caller
 // th.swia rd, (rs1), imm5, imm2 Store indexed word
 // th.swib rd, (rs1), imm5, imm2 Store indexed word
 // th.sdia rd, (rs1), imm5, imm2 Store indexed double-word
-// th.sdib rd, (rs1), imm5, imm2 Store indexed double-word
 // th.lrb rd, rs1, rs2, imm2 Load indexed byte
 // th.lrbu rd, rs1, rs2, imm2 Load indexed unsigned byte
 // th.lrh rd, rs1, rs2, imm2 Load indexed half-word
@@ -1276,10 +1316,10 @@ f28–31  ft8–11  FP temporaries                  Caller
 
  */
 
-#define VECTOR_SEW8  0b000
-#define VECTOR_SEW16 0b001
-#define VECTOR_SEW32 0b010
-#define VECTOR_SEW64 0b011
+#define VECTOR_SEW8   0b000
+#define VECTOR_SEW16  0b001
+#define VECTOR_SEW32  0b010
+#define VECTOR_SEW64  0b011
 #define VECTOR_SEWNA  0b111  // N/A
 #define VECTOR_SEWANY 0b1000 // any sew would be ok, but not N/A.
 
@@ -1411,7 +1451,7 @@ f28–31  ft8–11  FP temporaries                  Caller
 #define VFSLIDE1DOWN_VF(vd, vs2, rs1, vm) EMIT(R_type(0b0011110 | (vm), vs2, rs1, 0b101, vd, 0b1010111)) // 001111...........101.....1010111
 
 #define VFMV_S_F(vd, rs1) EMIT(I_type((rv64_xtheadvector ? 0b001101100000 : 0b010000100000), rs1, 0b101, vd, 0b1010111)) // 010000100000.....101.....1010111
-#define VFMV_V_F(vd, rs1) EMIT(I_type(0b010111100000, rs1, 0b101, vd, 0b1010111)) // 010111100000.....101.....1010111
+#define VFMV_V_F(vd, rs1) EMIT(I_type(0b010111100000, rs1, 0b101, vd, 0b1010111))                                        // 010111100000.....101.....1010111
 
 #define VFMERGE_VFM(vd, vs2, rs1) EMIT(R_type(0b0101110, vs2, rs1, 0b101, vd, 0b1010111)) // 0101110..........101.....1010111
 
@@ -1497,8 +1537,8 @@ f28–31  ft8–11  FP temporaries                  Caller
 #define VFSQRT_V(vd, vs2, vm)          EMIT(R_type((rv64_xtheadvector ? 0b1000110 : 0b0100110) | (vm), vs2, 0b00000, 0b001, vd, 0b1010111)) // 010011......00000001.....1010111
 #define VFCLASS_V(vd, vs2, vm)         EMIT(R_type((rv64_xtheadvector ? 0b1000110 : 0b0100110) | (vm), vs2, 0b10000, 0b001, vd, 0b1010111)) // 010011......10000001.....1010111
 
-#define VFRSQRT7_V(vd, vs2, vm)        EMIT(R_type(0b0100110 | (vm), vs2, 0b00100, 0b001, vd, 0b1010111)) // 010011......00100001.....1010111
-#define VFREC7_V(vd, vs2, vm)          EMIT(R_type(0b0100110 | (vm), vs2, 0b00101, 0b001, vd, 0b1010111)) // 010011......00101001.....1010111
+#define VFRSQRT7_V(vd, vs2, vm) EMIT(R_type(0b0100110 | (vm), vs2, 0b00100, 0b001, vd, 0b1010111)) // 010011......00100001.....1010111
+#define VFREC7_V(vd, vs2, vm)   EMIT(R_type(0b0100110 | (vm), vs2, 0b00101, 0b001, vd, 0b1010111)) // 010011......00101001.....1010111
 
 #define VFWADD_VV(vd, vs2, vs1, vm)     EMIT(R_type(0b1100000 | (vm), vs2, vs1, 0b001, vd, 0b1010111)) // 110000...........001.....1010111
 #define VFWREDUSUM_VS(vd, vs2, vs1, vm) EMIT(R_type(0b1100010 | (vm), vs2, vs1, 0b001, vd, 0b1010111)) // 110001...........001.....1010111
@@ -1528,12 +1568,12 @@ f28–31  ft8–11  FP temporaries                  Caller
 #define VSLIDEDOWN_VX(vd, vs2, rs1, vm) EMIT(R_type(0b0011110 | (vm), vs2, rs1, 0b100, vd, 0b1010111)) // 001111...........100.....1010111
 
 #define VADC_VXM(vd, vs2, rs1)   EMIT(R_type((0b0100000 | rv64_xtheadvector), vs2, rs1, 0b100, vd, 0b1010111)) // 0100000..........100.....1010111
-#define VMADC_VXM(vd, vs2, rs1)  EMIT(R_type(0b0100010, vs2, rs1, 0b100, vd, 0b1010111)) // 0100010..........100.....1010111
-#define VMADC_VX(vd, vs2, rs1)   EMIT(R_type(0b0100011, vs2, rs1, 0b100, vd, 0b1010111)) // 0100011..........100.....1010111
+#define VMADC_VXM(vd, vs2, rs1)  EMIT(R_type(0b0100010, vs2, rs1, 0b100, vd, 0b1010111))                       // 0100010..........100.....1010111
+#define VMADC_VX(vd, vs2, rs1)   EMIT(R_type(0b0100011, vs2, rs1, 0b100, vd, 0b1010111))                       // 0100011..........100.....1010111
 #define VSBC_VXM(vd, vs2, rs1)   EMIT(R_type((0b0100100 | rv64_xtheadvector), vs2, rs1, 0b100, vd, 0b1010111)) // 0100100..........100.....1010111
-#define VMSBC_VXM(vd, vs2, rs1)  EMIT(R_type(0b0100110, vs2, rs1, 0b100, vd, 0b1010111)) // 0100110..........100.....1010111
-#define VMSBC_VX(vd, vs2, rs1)   EMIT(R_type(0b0100111, vs2, rs1, 0b100, vd, 0b1010111)) // 0100111..........100.....1010111
-#define VMERGE_VXM(vd, vs2, rs1) EMIT(R_type(0b0101110, vs2, rs1, 0b100, vd, 0b1010111)) // 0101110..........100.....1010111
+#define VMSBC_VXM(vd, vs2, rs1)  EMIT(R_type(0b0100110, vs2, rs1, 0b100, vd, 0b1010111))                       // 0100110..........100.....1010111
+#define VMSBC_VX(vd, vs2, rs1)   EMIT(R_type(0b0100111, vs2, rs1, 0b100, vd, 0b1010111))                       // 0100111..........100.....1010111
+#define VMERGE_VXM(vd, vs2, rs1) EMIT(R_type(0b0101110, vs2, rs1, 0b100, vd, 0b1010111))                       // 0101110..........100.....1010111
 
 #define VMV_V_X(vd, rs1) EMIT(I_type(0b010111100000, rs1, 0b100, vd, 0b1010111)) // 010111100000.....100.....1010111
 
@@ -1574,12 +1614,12 @@ f28–31  ft8–11  FP temporaries                  Caller
 #define VRGATHEREI16_VV(vd, vs2, vs1, vm) EMIT(R_type(0b0011100 | (vm), vs2, vs1, 0b000, vd, 0b1010111)) // 001110...........000.....1010111
 
 #define VADC_VVM(vd, vs2, vs1)   EMIT(R_type((0b0100000 | rv64_xtheadvector), vs2, vs1, 0b000, vd, 0b1010111)) // 0100000..........000.....1010111
-#define VMADC_VVM(vd, vs2, vs1)  EMIT(R_type(0b0100010, vs2, vs1, 0b000, vd, 0b1010111)) // 0100010..........000.....1010111
-#define VMADC_VV(vd, vs2, vs1)   EMIT(R_type(0b0100011, vs2, vs1, 0b000, vd, 0b1010111)) // 0100011..........000.....1010111
+#define VMADC_VVM(vd, vs2, vs1)  EMIT(R_type(0b0100010, vs2, vs1, 0b000, vd, 0b1010111))                       // 0100010..........000.....1010111
+#define VMADC_VV(vd, vs2, vs1)   EMIT(R_type(0b0100011, vs2, vs1, 0b000, vd, 0b1010111))                       // 0100011..........000.....1010111
 #define VSBC_VVM(vd, vs2, vs1)   EMIT(R_type((0b0100100 | rv64_xtheadvector), vs2, vs1, 0b000, vd, 0b1010111)) // 0100100..........000.....1010111
-#define VMSBC_VVM(vd, vs2, vs1)  EMIT(R_type(0b0100110, vs2, vs1, 0b000, vd, 0b1010111)) // 0100110..........000.....1010111
-#define VMSBC_VV(vd, vs2, vs1)   EMIT(R_type(0b0100111, vs2, vs1, 0b000, vd, 0b1010111)) // 0100111..........000.....1010111
-#define VMERGE_VVM(vd, vs2, vs1) EMIT(R_type(0b0101110, vs2, vs1, 0b000, vd, 0b1010111)) // 0101110..........000.....1010111
+#define VMSBC_VVM(vd, vs2, vs1)  EMIT(R_type(0b0100110, vs2, vs1, 0b000, vd, 0b1010111))                       // 0100110..........000.....1010111
+#define VMSBC_VV(vd, vs2, vs1)   EMIT(R_type(0b0100111, vs2, vs1, 0b000, vd, 0b1010111))                       // 0100111..........000.....1010111
+#define VMERGE_VVM(vd, vs2, vs1) EMIT(R_type(0b0101110, vs2, vs1, 0b000, vd, 0b1010111))                       // 0101110..........000.....1010111
 
 #define VMV_V_V(vd, vs1) EMIT(I_type(0b010111100000, vs1, 0b000, vd, 0b1010111)) // 010111100000.....000.....1010111
 
@@ -1617,9 +1657,9 @@ f28–31  ft8–11  FP temporaries                  Caller
 #define VSLIDEDOWN_VI(vd, vs2, simm5, vm) EMIT(R_type(0b0011110 | (vm), vs2, simm5, 0b011, vd, 0b1010111)) // 001111...........011.....1010111
 
 #define VADC_VIM(vd, vs2, simm5)   EMIT(R_type((0b0100000 | rv64_xtheadvector), vs2, simm5, 0b011, vd, 0b1010111)) // 0100000..........011.....1010111
-#define VMADC_VIM(vd, vs2, simm5)  EMIT(R_type(0b0100010, vs2, simm5, 0b011, vd, 0b1010111)) // 0100010..........011.....1010111
-#define VMADC_VI(vd, vs2, simm5)   EMIT(R_type(0b0100011, vs2, simm5, 0b011, vd, 0b1010111)) // 0100011..........011.....1010111
-#define VMERGE_VIM(vd, vs2, simm5) EMIT(R_type(0b0101110, vs2, simm5, 0b011, vd, 0b1010111)) // 0101110..........011.....1010111
+#define VMADC_VIM(vd, vs2, simm5)  EMIT(R_type(0b0100010, vs2, simm5, 0b011, vd, 0b1010111))                       // 0100010..........011.....1010111
+#define VMADC_VI(vd, vs2, simm5)   EMIT(R_type(0b0100011, vs2, simm5, 0b011, vd, 0b1010111))                       // 0100011..........011.....1010111
+#define VMERGE_VIM(vd, vs2, simm5) EMIT(R_type(0b0101110, vs2, simm5, 0b011, vd, 0b1010111))                       // 0101110..........011.....1010111
 
 #define VMV_V_I(vd, simm5) EMIT(I_type(0b010111100000, simm5, 0b011, vd, 0b1010111)) // 010111100000.....011.....1010111
 
@@ -1659,8 +1699,8 @@ f28–31  ft8–11  FP temporaries                  Caller
 #define VAADD_VV(vd, vs2, vs1, vm)    EMIT(R_type(0b0010010 | (vm), vs2, vs1, 0b010, vd, 0b1010111)) // 001001...........010.....1010111
 #define VASUB_VV(vd, vs2, vs1, vm)    EMIT(R_type(0b0010110 | (vm), vs2, vs1, 0b010, vd, 0b1010111)) // 001011...........010.....1010111
 // Warning, no unsigned edition in Xtheadvector
-#define VAADDU_VV(vd, vs2, vs1, vm)   EMIT(R_type(0b0010000 | (vm), vs2, vs1, 0b010, vd, 0b1010111)) // 001000...........010.....1010111
-#define VASUBU_VV(vd, vs2, vs1, vm)   EMIT(R_type(0b0010100 | (vm), vs2, vs1, 0b010, vd, 0b1010111)) // 001010...........010.....1010111
+#define VAADDU_VV(vd, vs2, vs1, vm) EMIT(R_type(0b0010000 | (vm), vs2, vs1, 0b010, vd, 0b1010111)) // 001000...........010.....1010111
+#define VASUBU_VV(vd, vs2, vs1, vm) EMIT(R_type(0b0010100 | (vm), vs2, vs1, 0b010, vd, 0b1010111)) // 001010...........010.....1010111
 
 // Warning: zero-extended on xtheadvector!
 #define VMV_X_S(rd, vs2) EMIT(R_type((rv64_xtheadvector ? 0b0011001 : 0b0100001), vs2, 0b00000, 0b010, rd, 0b1010111)) // 0100001.....00000010.....1010111

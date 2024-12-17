@@ -52,26 +52,10 @@ f24-f31  fs0-fs7   Static registers                Callee
 #define xFlags   31
 #define xRIP     20
 #define xSavedSP 22
-// function to move from x86 regs number to LA64 reg number
-#define TO_LA64(A) (((A) > 7) ? ((A) + 15) : ((A) + 12))
-// 32bits version
-#define wEAX   xRAX
-#define wECX   xRCX
-#define wEDX   xRDX
-#define wEBX   xRBX
-#define wESP   xRSP
-#define wEBP   xRBP
-#define wESI   xRSI
-#define wEDI   xRDI
-#define wR8    xR8
-#define wR9    xR9
-#define wR10   xR10
-#define wR11   xR11
-#define wR12   xR12
-#define wR13   xR13
-#define wR14   xR14
-#define wR15   xR15
-#define wFlags xFlags
+
+// convert a x86 register to native according to the register mapping
+#define TO_NAT(A) (xRAX + (A) + (((A) > 7) ? 3 : 0))
+
 // scratch registers
 #define x1 5
 #define x2 6
@@ -80,13 +64,7 @@ f24-f31  fs0-fs7   Static registers                Callee
 #define x5 9
 #define x6 10
 #define x7 11
-// 32bits version of scratch
-#define w1 x1
-#define w2 x2
-#define w3 x3
-#define w4 x4
-#define w5 x5
-#define w6 x6
+
 // emu is r0
 #define xEmu 4
 // LA64 RA
@@ -1309,6 +1287,7 @@ LSX instruction starts with V, LASX instruction starts with XV.
 #define VBITSET_H(vd, vj, vk)        EMIT(type_3R(0b01110001000011101, vk, vj, vd))
 #define VBITSET_W(vd, vj, vk)        EMIT(type_3R(0b01110001000011110, vk, vj, vd))
 #define VBITSET_D(vd, vj, vk)        EMIT(type_3R(0b01110001000011111, vk, vj, vd))
+#define VBITSEL_V(vd, vj, vk, va)    EMIT(type_4R(0b000011010001, va, vk, vj, vd))
 #define VBITREV_B(vd, vj, vk)        EMIT(type_3R(0b01110001000100000, vk, vj, vd))
 #define VBITREV_H(vd, vj, vk)        EMIT(type_3R(0b01110001000100001, vk, vj, vd))
 #define VBITREV_W(vd, vj, vk)        EMIT(type_3R(0b01110001000100010, vk, vj, vd))
@@ -1391,9 +1370,11 @@ LSX instruction starts with V, LASX instruction starts with XV.
 #define VSLE_HU(vd, vj, vk)          EMIT(type_3R(0b01110000000001001, vk, vj, vd))
 #define VSLE_WU(vd, vj, vk)          EMIT(type_3R(0b01110000000001010, vk, vj, vd))
 #define VSLE_DU(vd, vj, vk)          EMIT(type_3R(0b01110000000001011, vk, vj, vd))
+#define VSLEI_DU(vd, vj, imm5)       EMIT(type_2RI5(0b01110010100001011, imm5, vj, vd))
 #define VSLT_B(vd, vj, vk)           EMIT(type_3R(0b01110000000001100, vk, vj, vd))
 #define VSLT_H(vd, vj, vk)           EMIT(type_3R(0b01110000000001101, vk, vj, vd))
 #define VSLT_W(vd, vj, vk)           EMIT(type_3R(0b01110000000001110, vk, vj, vd))
+#define VSLTI_W(vd, vj, imm5)        EMIT(type_2RI5(0b01110010100001110, imm5, vj, vd))
 #define VSLT_D(vd, vj, vk)           EMIT(type_3R(0b01110000000001111, vk, vj, vd))
 #define VSLT_BU(vd, vj, vk)          EMIT(type_3R(0b01110000000010000, vk, vj, vd))
 #define VSLT_HU(vd, vj, vk)          EMIT(type_3R(0b01110000000010001, vk, vj, vd))
@@ -1840,6 +1821,10 @@ LSX instruction starts with V, LASX instruction starts with XV.
 #define VEXT2XV_WU_HU(vd, vj)        EMIT(type_2R(0b0111011010011111001101, vj, vd))
 #define VEXT2XV_DU_HU(vd, vj)        EMIT(type_2R(0b0111011010011111001110, vj, vd))
 #define VEXT2XV_DU_WU(vd, vj)        EMIT(type_2R(0b0111011010011111001111, vj, vd))
+#define XVADDI_WU(vd, vj, imm5)      EMIT(type_2RI5(0b01110110100010110, imm5, vj, vd))
+#define XVSRLNI_H_W(vd, vj, imm5)    EMIT(type_2RI5(0b01110111010000001, imm5, vj, vd))
+#define XVSRLI_W(vd, vj, imm5)       EMIT(type_2RI5(0b01110111001100001, imm5, vj, vd))
+#define VSETEQZ_V(cd, vj)            EMIT(type_2R(0b0111001010011100100110, vj, cd & 0b111))
 
 ////////////////////////////////////////////////////////////////////////////////
 // (undocumented) LBT extension instructions

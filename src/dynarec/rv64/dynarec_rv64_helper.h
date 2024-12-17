@@ -2,7 +2,7 @@
 #define __DYNAREC_RV64_HELPER_H__
 
 // undef to get Close to SSE Float->int conversions
-//#define PRECISE_CVT
+// #define PRECISE_CVT
 
 #if STEP == 0
 #include "dynarec_rv64_pass0.h"
@@ -36,11 +36,11 @@
 #define LOCK_LOCK (int*)1
 
 // GETGD    get x64 register in gd
-#define GETGD gd = xRAX + ((nextop & 0x38) >> 3) + (rex.r << 3)
+#define GETGD gd = TO_NAT(((nextop & 0x38) >> 3) + (rex.r << 3))
 // GETED can use r1 for ed, and r2 for wback. wback is 0 if ed is xEAX..xEDI
 #define GETED(D)                                                                                \
     if (MODREG) {                                                                               \
-        ed = xRAX + (nextop & 7) + (rex.b << 3);                                                \
+        ed = TO_NAT((nextop & 7) + (rex.b << 3));                                               \
         wback = 0;                                                                              \
     } else {                                                                                    \
         SMREAD();                                                                               \
@@ -51,7 +51,7 @@
 // GETSED can use r1 for ed, and r2 for wback. ed will be sign extended!
 #define GETSED(D)                                                                               \
     if (MODREG) {                                                                               \
-        ed = xRAX + (nextop & 7) + (rex.b << 3);                                                \
+        ed = TO_NAT((nextop & 7) + (rex.b << 3));                                               \
         wback = 0;                                                                              \
         if (!rex.w) {                                                                           \
             ADDW(x1, ed, xZR);                                                                  \
@@ -69,7 +69,7 @@
 // GETEDx can use r1 for ed, and r2 for wback. wback is 0 if ed is xEAX..xEDI
 #define GETEDx(D)                                                                               \
     if (MODREG) {                                                                               \
-        ed = xRAX + (nextop & 7) + (rex.b << 3);                                                \
+        ed = TO_NAT((nextop & 7) + (rex.b << 3));                                               \
         wback = 0;                                                                              \
     } else {                                                                                    \
         SMREAD();                                                                               \
@@ -79,7 +79,7 @@
     }
 #define GETEDz(D)                                                                               \
     if (MODREG) {                                                                               \
-        ed = xRAX + (nextop & 7) + (rex.b << 3);                                                \
+        ed = TO_NAT((nextop & 7) + (rex.b << 3));                                               \
         wback = 0;                                                                              \
     } else {                                                                                    \
         SMREAD();                                                                               \
@@ -90,7 +90,7 @@
 // GETED32 can use r1 for ed, and r2 for wback. wback is 0 if ed is xEAX..xEDI
 #define GETED32(D)                                                                                \
     if (MODREG) {                                                                                 \
-        ed = xRAX + (nextop & 7) + (rex.b << 3);                                                  \
+        ed = TO_NAT((nextop & 7) + (rex.b << 3));                                                 \
         wback = 0;                                                                                \
     } else {                                                                                      \
         SMREAD();                                                                                 \
@@ -101,7 +101,7 @@
 // GETEDH can use hint for ed, and x1 or x2 for wback (depending on hint), might also use x3. wback is 0 if ed is xEAX..xEDI
 #define GETEDH(hint, D)                                                                                                                 \
     if (MODREG) {                                                                                                                       \
-        ed = xRAX + (nextop & 7) + (rex.b << 3);                                                                                        \
+        ed = TO_NAT((nextop & 7) + (rex.b << 3));                                                                                       \
         wback = 0;                                                                                                                      \
     } else {                                                                                                                            \
         SMREAD();                                                                                                                       \
@@ -112,7 +112,7 @@
 // GETEDW can use hint for wback and ret for ed. wback is 0 if ed is xEAX..xEDI
 #define GETEDW(hint, ret, D)                                                                                                            \
     if (MODREG) {                                                                                                                       \
-        ed = xRAX + (nextop & 7) + (rex.b << 3);                                                                                        \
+        ed = TO_NAT((nextop & 7) + (rex.b << 3));                                                                                       \
         MV(ret, ed);                                                                                                                    \
         wback = 0;                                                                                                                      \
     } else {                                                                                                                            \
@@ -122,14 +122,14 @@
         LDxw(ed, wback, fixedaddress);                                                                                                  \
     }
 // GETGW extract x64 register in gd, that is i
-#define GETGW(i)                                       \
-    gd = xRAX + ((nextop & 0x38) >> 3) + (rex.r << 3); \
-    ZEXTH(i, gd);                                      \
+#define GETGW(i)                                        \
+    gd = TO_NAT(((nextop & 0x38) >> 3) + (rex.r << 3)); \
+    ZEXTH(i, gd);                                       \
     gd = i;
 // GETEWW will use i for ed, and can use w for wback.
 #define GETEWW(w, i, D)                                                                       \
     if (MODREG) {                                                                             \
-        wback = xRAX + (nextop & 7) + (rex.b << 3);                                           \
+        wback = TO_NAT((nextop & 7) + (rex.b << 3));                                          \
         ZEXTH(i, wback);                                                                      \
         ed = i;                                                                               \
         wb1 = 0;                                                                              \
@@ -145,7 +145,7 @@
 // GETSEW will use i for ed, and *may* use x3 for wback. This is the Signed version
 #define GETSEW(i, D)                                                                           \
     if (MODREG) {                                                                              \
-        wback = xRAX + (nextop & 7) + (rex.b << 3);                                            \
+        wback = TO_NAT((nextop & 7) + (rex.b << 3));                                           \
         SEXTH(i, wback);                                                                       \
         ed = i;                                                                                \
         wb1 = 0;                                                                               \
@@ -169,18 +169,18 @@
         OR(wback, wback, w);        \
     }
 // Write back gd in correct register (gd needs to be 16bits only!)
-#define GWBACK                                                \
-    do {                                                      \
-        int g = xRAX + ((nextop & 0x38) >> 3) + (rex.r << 3); \
-        SRLI(g, g, 16);                                       \
-        SLLI(g, g, 16);                                       \
-        OR(g, g, gd);                                         \
+#define GWBACK                                                 \
+    do {                                                       \
+        int g = TO_NAT(((nextop & 0x38) >> 3) + (rex.r << 3)); \
+        SRLI(g, g, 16);                                        \
+        SLLI(g, g, 16);                                        \
+        OR(g, g, gd);                                          \
     } while (0)
 
 // GETEDO can use r1 for ed, and r2 for wback. wback is 0 if ed is xEAX..xEDI
 #define GETEDO(O, D, S)                                                                        \
     if (MODREG) {                                                                              \
-        ed = xRAX + (nextop & 7) + (rex.b << 3);                                               \
+        ed = TO_NAT((nextop & 7) + (rex.b << 3));                                              \
         wback = 0;                                                                             \
     } else {                                                                                   \
         SMREAD();                                                                              \
@@ -192,7 +192,7 @@
 // GETEDOz can use r1 for ed, and r2 for wback. wback is 0 if ed is xEAX..xEDI
 #define GETEDOz(O, D, S)                                                                       \
     if (MODREG) {                                                                              \
-        ed = xRAX + (nextop & 7) + (rex.b << 3);                                               \
+        ed = TO_NAT((nextop & 7) + (rex.b << 3));                                              \
         wback = 0;                                                                             \
     } else {                                                                                   \
         SMREAD();                                                                              \
@@ -215,10 +215,10 @@
     }
 
 // GETGW extract x64 register in gd, that is i, Signed extented
-#define GETSGW(i)                                      \
-    gd = xRAX + ((nextop & 0x38) >> 3) + (rex.r << 3); \
-    SLLIW(i, gd, 16);                                  \
-    SRAIW(i, i, 16);                                   \
+#define GETSGW(i)                                       \
+    gd = TO_NAT(((nextop & 0x38) >> 3) + (rex.r << 3)); \
+    SLLIW(i, gd, 16);                                   \
+    SRAIW(i, i, 16);                                    \
     gd = i;
 
 // Write back ed in wback (if wback not 0)
@@ -232,12 +232,12 @@
 #define GETEB(i, D)                                                                             \
     if (MODREG) {                                                                               \
         if (rex.rex) {                                                                          \
-            wback = xRAX + (nextop & 7) + (rex.b << 3);                                         \
+            wback = TO_NAT((nextop & 7) + (rex.b << 3));                                        \
             wb2 = 0;                                                                            \
         } else {                                                                                \
             wback = (nextop & 7);                                                               \
             wb2 = (wback >> 2) * 8;                                                             \
-            wback = xRAX + (wback & 3);                                                         \
+            wback = TO_NAT(wback & 3);                                                          \
         }                                                                                       \
         if (wb2) {                                                                              \
             if (rv64_xtheadbb) {                                                                \
@@ -261,12 +261,12 @@
 #define GETEBO(i, D)                                                                            \
     if (MODREG) {                                                                               \
         if (rex.rex) {                                                                          \
-            wback = xRAX + (nextop & 7) + (rex.b << 3);                                         \
+            wback = TO_NAT((nextop & 7) + (rex.b << 3));                                        \
             wb2 = 0;                                                                            \
         } else {                                                                                \
             wback = (nextop & 7);                                                               \
             wb2 = (wback >> 2) * 8;                                                             \
-            wback = xRAX + (wback & 3);                                                         \
+            wback = TO_NAT(wback & 3);                                                          \
         }                                                                                       \
         if (wb2) {                                                                              \
             if (rv64_xtheadbb) {                                                                \
@@ -292,12 +292,12 @@
 #define GETSEB(i, D)                                                                            \
     if (MODREG) {                                                                               \
         if (rex.rex) {                                                                          \
-            wback = xRAX + (nextop & 7) + (rex.b << 3);                                         \
+            wback = TO_NAT((nextop & 7) + (rex.b << 3));                                        \
             wb2 = 0;                                                                            \
         } else {                                                                                \
             wback = (nextop & 7);                                                               \
             wb2 = (wback >> 2) * 8;                                                             \
-            wback = xRAX + (wback & 3);                                                         \
+            wback = TO_NAT(wback & 3);                                                          \
         }                                                                                       \
         MV(i, wback);                                                                           \
         SLLIW(i, i, 24 - wb2);                                                                  \
@@ -315,12 +315,12 @@
 #define GETEB32(i, D)                                                                             \
     if (MODREG) {                                                                                 \
         if (rex.rex) {                                                                            \
-            wback = xRAX + (nextop & 7) + (rex.b << 3);                                           \
+            wback = TO_NAT((nextop & 7) + (rex.b << 3));                                          \
             wb2 = 0;                                                                              \
         } else {                                                                                  \
             wback = (nextop & 7);                                                                 \
             wb2 = (wback >> 2) * 8;                                                               \
-            wback = xRAX + (wback & 3);                                                           \
+            wback = TO_NAT(wback & 3);                                                            \
         }                                                                                         \
         if (wb2) {                                                                                \
             if (rv64_xtheadbb) {                                                                  \
@@ -343,37 +343,39 @@
     }
 
 // GETGB will use i for gd
-#define GETGB(i)                                            \
-    if (rex.rex) {                                          \
-        gb1 = xRAX + ((nextop & 0x38) >> 3) + (rex.r << 3); \
-        gb2 = 0;                                            \
-    } else {                                                \
-        gd = (nextop & 0x38) >> 3;                          \
-        gb2 = ((gd & 4) >> 2);                              \
-        gb1 = xRAX + (gd & 3);                              \
-    }                                                       \
-    gd = i;                                                 \
-    if (gb2) {                                              \
-        if (rv64_xtheadbb) {                                \
-            TH_EXTU(gd, gb1, 15, 8);                        \
-        } else {                                            \
-            SRLI(gd, gb1, 8);                               \
-            ANDI(gd, gd, 0xff);                             \
-        }                                                   \
-    } else                                                  \
+#define GETGB(i)                                             \
+    if (rex.rex) {                                           \
+        gb1 = TO_NAT(((nextop & 0x38) >> 3) + (rex.r << 3)); \
+        gb2 = 0;                                             \
+    } else {                                                 \
+        gd = (nextop & 0x38) >> 3;                           \
+        gb2 = ((gd & 4) >> 2);                               \
+        gb1 = TO_NAT(gd & 3);                                \
+    }                                                        \
+    gd = i;                                                  \
+    if (gb2) {                                               \
+        if (rv64_xtheadbb) {                                 \
+            TH_EXTU(gd, gb1, 15, 8);                         \
+        } else {                                             \
+            SRLI(gd, gb1, 8);                                \
+            ANDI(gd, gd, 0xff);                              \
+        }                                                    \
+    } else                                                   \
         ANDI(gd, gb1, 0xff);
 
 // Write gb (gd) back to original register / memory, using s1 as scratch
-#define GBBACK(s1) do {                   \
-    if (gb2) {                            \
-        MOV64x(s1, 0xffffffffffff00ffLL); \
-        AND(gb1, gb1, s1);                \
-        SLLI(s1, gd, 8);                  \
-        OR(gb1, gb1, s1);                 \
-    } else {                              \
-        ANDI(gb1, gb1, ~0xff);            \
-        OR(gb1, gb1, gd);                 \
-    } } while (0)
+#define GBBACK(s1)                            \
+    do {                                      \
+        if (gb2) {                            \
+            MOV64x(s1, 0xffffffffffff00ffLL); \
+            AND(gb1, gb1, s1);                \
+            SLLI(s1, gd, 8);                  \
+            OR(gb1, gb1, s1);                 \
+        } else {                              \
+            ANDI(gb1, gb1, ~0xff);            \
+            OR(gb1, gb1, gd);                 \
+        }                                     \
+    } while (0)
 
 // Write eb (ed) back to original register / memory, using s1 as scratch
 #define EBBACK(s1, c)                     \
@@ -522,23 +524,23 @@
     }
 
 // Get EM as vector, might use x1, x2 and x3; requires SEW64
-#define GETEM_vector(a, D)                                                                     \
-    if (MODREG) {                                                                              \
-        a = mmx_get_reg_vector(dyn, ninst, x1, x2, x3, (nextop & 7));                          \
-    } else {                                                                                   \
-        SMREAD();                                                                              \
-        addr = geted(dyn, addr, ninst, nextop, &ed, a, x3, &fixedaddress, rex, NULL, 1, D);    \
-        a = fpu_get_scratch(dyn);                                                              \
-        FLD(a, ed, fixedaddress);                                                              \
-        VFMV_S_F(a, a);                                                                        \
+#define GETEM_vector(a, D)                                                                  \
+    if (MODREG) {                                                                           \
+        a = mmx_get_reg_vector(dyn, ninst, x1, x2, x3, (nextop & 7));                       \
+    } else {                                                                                \
+        SMREAD();                                                                           \
+        addr = geted(dyn, addr, ninst, nextop, &ed, a, x3, &fixedaddress, rex, NULL, 1, D); \
+        a = fpu_get_scratch(dyn);                                                           \
+        FLD(a, ed, fixedaddress);                                                           \
+        VFMV_S_F(a, a);                                                                     \
     }
 
 // Put Back EM if it was a memory and not an mm register; requires SEW64
-#define PUTEM_vector(a)                                     \
-    if (!MODREG) {                                          \
-        VFMV_F_S(a, a);                                     \
-        FSD(a, ed, fixedaddress);                           \
-        SMWRITE2();                                         \
+#define PUTEM_vector(a)           \
+    if (!MODREG) {                \
+        VFMV_F_S(a, a);           \
+        FSD(a, ed, fixedaddress); \
+        SMWRITE2();               \
     }
 
 #define GETGX_empty_vector(a)                   \
@@ -580,12 +582,12 @@
         SW(GX1, gback, gdoffset + i * 4);      \
     }
 
-#define MMX_LOOP_DS(GX1, EX1, F)               \
-    for (int i = 0; i < 2; ++i) {              \
-        LW(GX1, gback, gdoffset + i * 4);      \
-        LW(EX1, wback, fixedaddress + i * 4);  \
-        F;                                     \
-        SW(GX1, gback, gdoffset + i * 4);      \
+#define MMX_LOOP_DS(GX1, EX1, F)              \
+    for (int i = 0; i < 2; ++i) {             \
+        LW(GX1, gback, gdoffset + i * 4);     \
+        LW(EX1, wback, fixedaddress + i * 4); \
+        F;                                    \
+        SW(GX1, gback, gdoffset + i * 4);     \
     }
 
 #define MMX_LOOP_W(GX1, EX1, F)                \
@@ -677,13 +679,15 @@
 
 // CALL will use x6 for the call address. Return value can be put in ret (unless ret is -1)
 // R0 will not be pushed/popd if ret is -2
-#define CALL(F, ret) call_c(dyn, ninst, F, x6, ret, 1, 0)
+#define CALL(F, ret, arg1, arg2)                          call_c(dyn, ninst, F, x6, ret, 1, 0, arg1, arg2, 0, 0, 0, 0)
+#define CALL4(F, ret, arg1, arg2, arg3, arg4)             call_c(dyn, ninst, F, x6, ret, 1, 0, arg1, arg2, arg3, arg4, 0, 0)
+#define CALL6(F, ret, arg1, arg2, arg3, arg4, arg5, arg6) call_c(dyn, ninst, F, x6, ret, 1, 0, arg1, arg2, arg3, arg4, arg5, arg6)
 // CALL_ will use x6 for the call address. Return value can be put in ret (unless ret is -1)
 // R0 will not be pushed/popd if ret is -2
-#define CALL_(F, ret, reg) call_c(dyn, ninst, F, x6, ret, 1, reg)
+#define CALL_(F, ret, reg, arg1, arg2) call_c(dyn, ninst, F, x6, ret, 1, reg, arg1, arg2, 0, 0, 0, 0)
 // CALL_S will use x6 for the call address. Return value can be put in ret (unless ret is -1)
 // R0 will not be pushed/popd if ret is -2. Flags are not save/restored
-#define CALL_S(F, ret) call_c(dyn, ninst, F, x6, ret, 0, 0)
+#define CALL_S(F, ret, arg1) call_c(dyn, ninst, F, x6, ret, 0, 0, arg1, 0, 0, 0, 0, 0)
 
 #define MARKi(i)    dyn->insts[ninst].mark[i] = dyn->native_size
 #define GETMARKi(i) dyn->insts[ninst].mark[i]
@@ -798,7 +802,8 @@
     BNEZ(reg, j64);
 
 #define IFX(A)      if ((dyn->insts[ninst].x64.gen_flags & (A)))
-#define IFX_PENDOR0 if ((dyn->insts[ninst].x64.gen_flags & (X_PEND) || !dyn->insts[ninst].x64.gen_flags))
+#define IFXORNAT(A) if ((dyn->insts[ninst].x64.gen_flags & (A)) || dyn->insts[ninst].nat_flags_fusion)
+#define IFX_PENDOR0 if ((dyn->insts[ninst].x64.gen_flags & (X_PEND) || (!dyn->insts[ninst].x64.gen_flags && !dyn->insts[ninst].nat_flags_fusion)))
 #define IFXX(A)     if ((dyn->insts[ninst].x64.gen_flags == (A)))
 #define IFX2X(A, B) if ((dyn->insts[ninst].x64.gen_flags == (A) || dyn->insts[ninst].x64.gen_flags == (B) || dyn->insts[ninst].x64.gen_flags == ((A) | (B))))
 #define IFXN(A, B)  if ((dyn->insts[ninst].x64.gen_flags & (A) && !(dyn->insts[ninst].x64.gen_flags & (B))))
@@ -807,76 +812,59 @@
 #define LOAD_REG(A)  LD(x##A, xEmu, offsetof(x64emu_t, regs[_##A]))
 
 // Need to also store current value of some register, as they may be used by functions like setjmp
-#define STORE_XEMU_CALL(s0)                             \
-    if (rv64_xtheadmempair) {                           \
-        ADDI(s0, xEmu, offsetof(x64emu_t, regs[_RSP])); \
-        TH_SDD(xRDX, xRBX, xEmu, 1);                    \
-        TH_SDD(xRSP, xRBP, s0, 0);                      \
-        TH_SDD(xRSI, xRDI, s0, 1);                      \
-        TH_SDD(xR8, xR9, s0, 2);                        \
-        TH_SDD(xR10, xR11, s0, 3);                      \
-    } else {                                            \
-        STORE_REG(RBX);                                 \
-        STORE_REG(RDX);                                 \
-        STORE_REG(RSP);                                 \
-        STORE_REG(RBP);                                 \
-        STORE_REG(RDI);                                 \
-        STORE_REG(RSI);                                 \
-        STORE_REG(R8);                                  \
-        STORE_REG(R9);                                  \
-        STORE_REG(R10);                                 \
-        STORE_REG(R11);                                 \
-    }
+#define STORE_XEMU_CALL(s0) \
+    STORE_REG(RBX);         \
+    STORE_REG(RSP);         \
+    STORE_REG(RBP);         \
+    STORE_REG(R10);         \
+    STORE_REG(R11);         \
+    STORE_REG(R12);         \
+    STORE_REG(R13);         \
+    STORE_REG(R14);         \
+    STORE_REG(R15);
 
 #define LOAD_XEMU_CALL()
 
-#define LOAD_XEMU_REM(s0)                               \
-    if (rv64_xtheadmempair) {                           \
-        ADDI(s0, xEmu, offsetof(x64emu_t, regs[_RSP])); \
-        TH_LDD(xRDX, xRBX, xEmu, 1);                    \
-        TH_LDD(xRSP, xRBP, s0, 0);                      \
-        TH_LDD(xRSI, xRDI, s0, 1);                      \
-        TH_LDD(xR8, xR9, s0, 2);                        \
-        TH_LDD(xR10, xR11, s0, 3);                      \
-    } else {                                            \
-        LOAD_REG(RBX);                                  \
-        LOAD_REG(RDX);                                  \
-        LOAD_REG(RSP);                                  \
-        LOAD_REG(RBP);                                  \
-        LOAD_REG(RDI);                                  \
-        LOAD_REG(RSI);                                  \
-        LOAD_REG(R8);                                   \
-        LOAD_REG(R9);                                   \
-        LOAD_REG(R10);                                  \
-        LOAD_REG(R11);                                  \
-    }
+#define LOAD_XEMU_REM(s0) \
+    LOAD_REG(RBX);        \
+    LOAD_REG(RSP);        \
+    LOAD_REG(RBP);        \
+    LOAD_REG(R10);        \
+    LOAD_REG(R11);        \
+    LOAD_REG(R12);        \
+    LOAD_REG(R13);        \
+    LOAD_REG(R14);        \
+    LOAD_REG(R15);
 
 
-#define SET_DFNONE()                           \
-    do {                                       \
-    dyn->f.dfnone_here=1;                      \
-    if (!dyn->f.dfnone) {                      \
-        SW(xZR, xEmu, offsetof(x64emu_t, df)); \
-        dyn->f.dfnone = 1;                     \
-    } } while(0);
+#define SET_DFNONE()                               \
+    do {                                           \
+        dyn->f.dfnone_here = 1;                    \
+        if (!dyn->f.dfnone) {                      \
+            SW(xZR, xEmu, offsetof(x64emu_t, df)); \
+            dyn->f.dfnone = 1;                     \
+        }                                          \
+    } while (0);
 
-#define SET_DF(S, N)                         \
-    if ((N) != d_none) {                     \
-        MOV_U12(S, (N));                     \
-        SW(S, xEmu, offsetof(x64emu_t, df)); \
-        if(dyn->f.pending==SF_PENDING && dyn->insts[ninst].x64.need_after && !(dyn->insts[ninst].x64.need_after&X_PEND)) {  \
-            CALL_(UpdateFlags, -1, 0);       \
-            dyn->f.pending = SF_SET;         \
-            SET_NODF();                      \
-        }                                    \
-        dyn->f.dfnone = 0;                   \
-    } else                                   \
+#define SET_DF(S, N)                                                                                                            \
+    if ((N) != d_none) {                                                                                                        \
+        MOV_U12(S, (N));                                                                                                        \
+        SW(S, xEmu, offsetof(x64emu_t, df));                                                                                    \
+        if (dyn->f.pending == SF_PENDING && dyn->insts[ninst].x64.need_after && !(dyn->insts[ninst].x64.need_after & X_PEND)) { \
+            CALL_(UpdateFlags, -1, 0, 0, 0);                                                                                    \
+            dyn->f.pending = SF_SET;                                                                                            \
+            SET_NODF();                                                                                                         \
+        }                                                                                                                       \
+        dyn->f.dfnone = 0;                                                                                                      \
+    } else                                                                                                                      \
         SET_DFNONE()
 #define SET_NODF() dyn->f.dfnone = 0
-#define SET_DFOK() dyn->f.dfnone = 1; dyn->f.dfnone_here=1
+#define SET_DFOK()     \
+    dyn->f.dfnone = 1; \
+    dyn->f.dfnone_here = 1
 
 #define CLEAR_FLAGS() \
-    IFX(X_ALL) { ANDI(xFlags, xFlags, ~((1UL << F_AF) | (1UL << F_CF) | (1UL << F_OF2) | (1UL << F_ZF) | (1UL << F_SF) | (1UL << F_PF))); }
+    IFX (X_ALL) { ANDI(xFlags, xFlags, ~((1UL << F_AF) | (1UL << F_CF) | (1UL << F_OF2) | (1UL << F_ZF) | (1UL << F_SF) | (1UL << F_PF))); }
 
 #define SET_FLAGS_NEZ(reg, F, scratch)      \
     do {                                    \
@@ -963,37 +951,39 @@
     OR(dst, dst, s1)
 
 #if STEP == 0
-#define X87_PUSH_OR_FAIL(var, dyn, ninst, scratch, t)   var = x87_do_push(dyn, ninst, scratch, t)
-#define X87_PUSH_EMPTY_OR_FAIL(dyn, ninst, scratch)     x87_do_push_empty(dyn, ninst, scratch)
-#define X87_POP_OR_FAIL(dyn, ninst, scratch)            x87_do_pop(dyn, ninst, scratch)
+#define X87_PUSH_OR_FAIL(var, dyn, ninst, scratch, t) var = x87_do_push(dyn, ninst, scratch, t)
+#define X87_PUSH_EMPTY_OR_FAIL(dyn, ninst, scratch)   x87_do_push_empty(dyn, ninst, scratch)
+#define X87_POP_OR_FAIL(dyn, ninst, scratch)          x87_do_pop(dyn, ninst, scratch)
 #else
-#define X87_PUSH_OR_FAIL(var, dyn, ninst, scratch, t) \
-    if ((dyn->e.x87stack==8) || (dyn->e.pushed==8)) {   \
-        if(box64_dynarec_dump) dynarec_log(LOG_NONE, " Warning, suspicious x87 Push, stack=%d/%d on inst %d\n", dyn->e.x87stack, dyn->e.pushed, ninst); \
-        dyn->abort = 1;                                 \
-        return addr;                                    \
-    }                                                   \
+#define X87_PUSH_OR_FAIL(var, dyn, ninst, scratch, t)                                                                                                    \
+    if ((dyn->e.x87stack == 8) || (dyn->e.pushed == 8)) {                                                                                                \
+        if (box64_dynarec_dump) dynarec_log(LOG_NONE, " Warning, suspicious x87 Push, stack=%d/%d on inst %d\n", dyn->e.x87stack, dyn->e.pushed, ninst); \
+        dyn->abort = 1;                                                                                                                                  \
+        return addr;                                                                                                                                     \
+    }                                                                                                                                                    \
     var = x87_do_push(dyn, ninst, scratch, t);
 
-#define X87_PUSH_EMPTY_OR_FAIL(dyn, ninst, scratch) \
-    if ((dyn->e.x87stack==8) || (dyn->e.pushed==8)) {   \
-        if(box64_dynarec_dump) dynarec_log(LOG_NONE, " Warning, suspicious x87 Push, stack=%d/%d on inst %d\n", dyn->e.x87stack, dyn->e.pushed, ninst); \
-        dyn->abort = 1;                                 \
-        return addr;                                    \
-    }                                                   \
+#define X87_PUSH_EMPTY_OR_FAIL(dyn, ninst, scratch)                                                                                                      \
+    if ((dyn->e.x87stack == 8) || (dyn->e.pushed == 8)) {                                                                                                \
+        if (box64_dynarec_dump) dynarec_log(LOG_NONE, " Warning, suspicious x87 Push, stack=%d/%d on inst %d\n", dyn->e.x87stack, dyn->e.pushed, ninst); \
+        dyn->abort = 1;                                                                                                                                  \
+        return addr;                                                                                                                                     \
+    }                                                                                                                                                    \
     x87_do_push_empty(dyn, ninst, scratch);
 
-#define X87_POP_OR_FAIL(dyn, ninst, scratch) \
-    if ((dyn->e.x87stack==-8) || (dyn->e.poped==8)) {   \
-        if(box64_dynarec_dump) dynarec_log(LOG_NONE, " Warning, suspicious x87 Pop, stack=%d/%d on inst %d\n", dyn->e.x87stack, dyn->e.poped, ninst); \
-        dyn->abort = 1;                                 \
-        return addr;                                    \
-    }                                                   \
+#define X87_POP_OR_FAIL(dyn, ninst, scratch)                                                                                                           \
+    if ((dyn->e.x87stack == -8) || (dyn->e.poped == 8)) {                                                                                              \
+        if (box64_dynarec_dump) dynarec_log(LOG_NONE, " Warning, suspicious x87 Pop, stack=%d/%d on inst %d\n", dyn->e.x87stack, dyn->e.poped, ninst); \
+        dyn->abort = 1;                                                                                                                                \
+        return addr;                                                                                                                                   \
+    }                                                                                                                                                  \
     x87_do_pop(dyn, ninst, scratch);
 #endif
 
 #ifndef MAYSETFLAGS
-#define MAYSETFLAGS() do {} while (0)
+#define MAYSETFLAGS() \
+    do {              \
+    } while (0)
 #endif
 
 #ifndef READFLAGS
@@ -1005,24 +995,46 @@
             j64 = (GETMARKF) - (dyn->native_size);  \
             BEQ(x3, xZR, j64);                      \
         }                                           \
-        CALL_(UpdateFlags, -1, 0);                  \
+        CALL_(UpdateFlags, -1, 0, 0, 0);            \
         MARKF;                                      \
         dyn->f.pending = SF_SET;                    \
         SET_DFOK();                                 \
     }
 #endif
 
+#ifndef READFLAGS_FUSION
+#define READFLAGS_FUSION(A, s1, s2, s3, s4, s5)                                                                     \
+    if(dyn->insts[ninst].nat_flags_fusion) get_free_scratch(dyn, ninst, &tmp1, &tmp2, &tmp3, s1, s2, s3, s4, s5);   \
+    else { tmp1=s1; tmp2=s2; tmp3=s3; }                                                                             \
+    READFLAGS(A)
+#endif
+
+#define NAT_FLAGS_OPS(op1, op2)                    \
+    do {                                           \
+        dyn->insts[ninst + 1].nat_flags_op1 = op1; \
+        dyn->insts[ninst + 1].nat_flags_op2 = op2; \
+    } while (0)
+
+#define NAT_FLAGS_ENABLE_CARRY() dyn->insts[ninst].nat_flags_carry = 1
+#define NAT_FLAGS_ENABLE_SIGN()  dyn->insts[ninst].nat_flags_sign = 1
+
 #ifndef SETFLAGS
-#define SETFLAGS(A, B)                                                                                              \
+#define SETFLAGS(A, B, FUSION)                                                                                      \
     if (dyn->f.pending != SF_SET                                                                                    \
-        && ((B)&SF_SUB)                                                                                             \
+        && ((B) & SF_SUB)                                                                                           \
         && (dyn->insts[ninst].x64.gen_flags & (~(A))))                                                              \
         READFLAGS(((dyn->insts[ninst].x64.gen_flags & X_PEND) ? X_ALL : dyn->insts[ninst].x64.gen_flags) & (~(A))); \
     if (dyn->insts[ninst].x64.gen_flags) switch (B) {                                                               \
             case SF_SUBSET:                                                                                         \
             case SF_SET: dyn->f.pending = SF_SET; break;                                                            \
-            case SF_SET_DF: dyn->f.pending = SF_SET; dyn->f.dfnone = 1; break;                                      \
-            case SF_SET_NODF: dyn->f.pending = SF_SET; dyn->f.dfnone = 0; break;                                    \
+            case SF_SET_DF:                                                                                         \
+                dyn->f.pending = SF_SET;                                                                            \
+                dyn->f.dfnone = 1;                                                                                  \
+                break;                                                                                              \
+            case SF_SET_NODF:                                                                                       \
+                dyn->f.pending = SF_SET;                                                                            \
+                dyn->f.dfnone = 0;                                                                                  \
+                break;                                                                                              \
             case SF_PENDING: dyn->f.pending = SF_PENDING; break;                                                    \
             case SF_SUBSET_PENDING:                                                                                 \
             case SF_SET_PENDING:                                                                                    \
@@ -1030,7 +1042,8 @@
                 break;                                                                                              \
         }                                                                                                           \
     else                                                                                                            \
-        dyn->f.pending = SF_SET
+        dyn->f.pending = SF_SET;                                                                                    \
+    dyn->insts[ninst].nat_flags_nofusion = (FUSION)
 #endif
 #ifndef JUMP
 #define JUMP(A, C)
@@ -1079,27 +1092,27 @@
     dyn->vector_sew = VECTOR_SEWNA;
 
 #if STEP < 2
-#define GETIP(A) TABLE64(0, 0)
+#define GETIP(A)  TABLE64(0, 0)
 #define GETIP_(A) TABLE64(0, 0)
 #else
 // put value in the Table64 even if not using it for now to avoid difference between Step2 and Step3. Needs to be optimized later...
-#define GETIP(A)                                     \
-    if (dyn->last_ip && ((A)-dyn->last_ip) < 2048) { \
-        uint64_t _delta_ip = (A)-dyn->last_ip;       \
-        dyn->last_ip += _delta_ip;                   \
-        if (_delta_ip) {                             \
-            ADDI(xRIP, xRIP, _delta_ip);             \
-        }                                            \
-    } else {                                         \
-        dyn->last_ip = (A);                          \
-        if (dyn->last_ip < 0xffffffff) {             \
-            MOV64x(xRIP, dyn->last_ip);              \
-        } else                                       \
-            TABLE64(xRIP, dyn->last_ip);             \
+#define GETIP(A)                                       \
+    if (dyn->last_ip && ((A) - dyn->last_ip) < 2048) { \
+        uint64_t _delta_ip = (A) - dyn->last_ip;       \
+        dyn->last_ip += _delta_ip;                     \
+        if (_delta_ip) {                               \
+            ADDI(xRIP, xRIP, _delta_ip);               \
+        }                                              \
+    } else {                                           \
+        dyn->last_ip = (A);                            \
+        if (dyn->last_ip < 0xffffffff) {               \
+            MOV64x(xRIP, dyn->last_ip);                \
+        } else                                         \
+            TABLE64(xRIP, dyn->last_ip);               \
     }
 #define GETIP_(A)                                       \
-    if (dyn->last_ip && ((A)-dyn->last_ip) < 2048) {    \
-        int64_t _delta_ip = (A)-dyn->last_ip;           \
+    if (dyn->last_ip && ((A) - dyn->last_ip) < 2048) {  \
+        int64_t _delta_ip = (A) - dyn->last_ip;         \
         if (_delta_ip) { ADDI(xRIP, xRIP, _delta_ip); } \
     } else {                                            \
         if ((A) < 0xffffffff) {                         \
@@ -1138,7 +1151,7 @@
 
 void rv64_epilog(void);
 void rv64_epilog_fast(void);
-void* rv64_next(x64emu_t* emu, uintptr_t addr);
+void* rv64_next(void);
 
 #ifndef STEPNAME
 #define STEPNAME3(N, M) N##M
@@ -1181,8 +1194,8 @@ void* rv64_next(x64emu_t* emu, uintptr_t addr);
 #define dynarec64_67_vector   STEPNAME(dynarec64_67_vector)
 #define dynarec64_0F_vector   STEPNAME(dynarec64_0F_vector)
 #define dynarec64_660F_vector STEPNAME(dynarec64_660F_vector)
-#define dynarec64_F20F_vector   STEPNAME(dynarec64_F20F_vector)
-#define dynarec64_F30F_vector   STEPNAME(dynarec64_F30F_vector)
+#define dynarec64_F20F_vector STEPNAME(dynarec64_F20F_vector)
+#define dynarec64_F30F_vector STEPNAME(dynarec64_F30F_vector)
 
 #define dynarec64_AVX       STEPNAME(dynarec64_AVX)
 #define dynarec64_AVX_F3_0F STEPNAME(dynarec64_AVX_F3_0F)
@@ -1331,6 +1344,7 @@ void* rv64_next(x64emu_t* emu, uintptr_t addr);
 #define fpu_reset_cache     STEPNAME(fpu_reset_cache)
 #define fpu_propagate_stack STEPNAME(fpu_propagate_stack)
 #define fpu_purgecache      STEPNAME(fpu_purgecache)
+#define fpu_needpurgecache  STEPNAME(fpu_needpurgecache)
 #define mmx_purgecache      STEPNAME(mmx_purgecache)
 #define x87_purgecache      STEPNAME(x87_purgecache)
 #define sse_purgecache      STEPNAME(sse_purgecache)
@@ -1362,7 +1376,7 @@ void jump_to_next(dynarec_rv64_t* dyn, uintptr_t ip, int reg, int ninst, int is3
 void ret_to_epilog(dynarec_rv64_t* dyn, int ninst, rex_t rex);
 void retn_to_epilog(dynarec_rv64_t* dyn, int ninst, rex_t rex, int n);
 void iret_to_epilog(dynarec_rv64_t* dyn, int ninst, int is64bits);
-void call_c(dynarec_rv64_t* dyn, int ninst, void* fnc, int reg, int ret, int saveflags, int save_reg);
+void call_c(dynarec_rv64_t* dyn, int ninst, void* fnc, int reg, int ret, int saveflags, int savereg, int arg1, int arg2, int arg3, int arg4, int arg5, int arg6);
 void call_n(dynarec_rv64_t* dyn, int ninst, void* fnc, int w);
 void grab_segdata(dynarec_rv64_t* dyn, uintptr_t addr, int ninst, int reg, int segment);
 void emit_cmp8(dynarec_rv64_t* dyn, int ninst, int s1, int s2, int s3, int s4, int s5, int s6);
@@ -1526,7 +1540,7 @@ int extcache_st_coherency(dynarec_rv64_t* dyn, int ninst, int a, int b);
 #define X87_ST0           extcache_no_i64(dyn, ninst, 0, extcache_get_current_st(dyn, ninst, 0))
 #define X87_ST(A)         extcache_no_i64(dyn, ninst, A, extcache_get_current_st(dyn, ninst, A))
 #else
-#define ST_IS_F(A) (extcache_get_st(dyn, ninst, A) == EXT_CACHE_ST_F)
+#define ST_IS_F(A)   (extcache_get_st(dyn, ninst, A) == EXT_CACHE_ST_F)
 #define ST_IS_I64(A) (extcache_get_st(dyn, ninst, A) == EXT_CACHE_ST_I64)
 #if STEP == 3
 #define X87_COMBINE(A, B) extcache_st_coherency(dyn, ninst, A, B)
@@ -1579,6 +1593,8 @@ void fpu_reset_cache(dynarec_rv64_t* dyn, int ninst, int reset_n);
 void fpu_propagate_stack(dynarec_rv64_t* dyn, int ninst);
 // purge the FPU cache (needs 3 scratch registers)
 void fpu_purgecache(dynarec_rv64_t* dyn, int ninst, int next, int s1, int s2, int s3);
+// check if the fpu cache need to be purged
+int fpu_needpurgecache(dynarec_rv64_t* dyn, int ninst);
 // purge MMX cache
 void mmx_purgecache(dynarec_rv64_t* dyn, int ninst, int next, int s1);
 // purge x87 cache
@@ -1647,85 +1663,95 @@ uintptr_t dynarec64_AVX_F3_0F(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip,
 #endif
 
 // GOCOND will use x1 and x3
-#define GOCOND(B, T1, T2)                                                           \
-    case B + 0x0:                                                                   \
-        INST_NAME(T1 "O " T2);                                                      \
-        GO(ANDI(x1, xFlags, 1 << F_OF2), EQZ, NEZ, X_OF)                            \
-        break;                                                                      \
-    case B + 0x1:                                                                   \
-        INST_NAME(T1 "NO " T2);                                                     \
-        GO(ANDI(x1, xFlags, 1 << F_OF2), NEZ, EQZ, X_OF)                            \
-        break;                                                                      \
-    case B + 0x2:                                                                   \
-        INST_NAME(T1 "C " T2);                                                      \
-        GO(ANDI(x1, xFlags, 1 << F_CF), EQZ, NEZ, X_CF)                             \
-        break;                                                                      \
-    case B + 0x3:                                                                   \
-        INST_NAME(T1 "NC " T2);                                                     \
-        GO(ANDI(x1, xFlags, 1 << F_CF), NEZ, EQZ, X_CF)                             \
-        break;                                                                      \
-    case B + 0x4:                                                                   \
-        INST_NAME(T1 "Z " T2);                                                      \
-        GO(ANDI(x1, xFlags, 1 << F_ZF), EQZ, NEZ, X_ZF)                             \
-        break;                                                                      \
-    case B + 0x5:                                                                   \
-        INST_NAME(T1 "NZ " T2);                                                     \
-        GO(ANDI(x1, xFlags, 1 << F_ZF), NEZ, EQZ, X_ZF)                             \
-        break;                                                                      \
-    case B + 0x6:                                                                   \
-        INST_NAME(T1 "BE " T2);                                                     \
-        GO(ANDI(x1, xFlags, (1 << F_CF) | (1 << F_ZF)), EQZ, NEZ, X_CF | X_ZF)      \
-        break;                                                                      \
-    case B + 0x7:                                                                   \
-        INST_NAME(T1 "NBE " T2);                                                    \
-        GO(ANDI(x1, xFlags, (1 << F_CF) | (1 << F_ZF)), NEZ, EQZ, X_CF | X_ZF)      \
-        break;                                                                      \
-    case B + 0x8:                                                                   \
-        INST_NAME(T1 "S " T2);                                                      \
-        GO(ANDI(x1, xFlags, 1 << F_SF), EQZ, NEZ, X_SF)                             \
-        break;                                                                      \
-    case B + 0x9:                                                                   \
-        INST_NAME(T1 "NS " T2);                                                     \
-        GO(ANDI(x1, xFlags, 1 << F_SF), NEZ, EQZ, X_SF)                             \
-        break;                                                                      \
-    case B + 0xA:                                                                   \
-        INST_NAME(T1 "P " T2);                                                      \
-        GO(ANDI(x1, xFlags, 1 << F_PF), EQZ, NEZ, X_PF)                             \
-        break;                                                                      \
-    case B + 0xB:                                                                   \
-        INST_NAME(T1 "NP " T2);                                                     \
-        GO(ANDI(x1, xFlags, 1 << F_PF), NEZ, EQZ, X_PF)                             \
-        break;                                                                      \
-    case B + 0xC:                                                                   \
-        INST_NAME(T1 "L " T2);                                                      \
-        GO(SRLI(x1, xFlags, F_SF - F_OF2);                                          \
-            XOR(x1, x1, xFlags);                                                    \
-            ANDI(x1, x1, 1 << F_OF2), EQZ, NEZ, X_SF | X_OF)                        \
-        break;                                                                      \
-    case B + 0xD:                                                                   \
-        INST_NAME(T1 "GE " T2);                                                     \
-        GO(SRLI(x1, xFlags, F_SF - F_OF2);                                          \
-            XOR(x1, x1, xFlags);                                                    \
-            ANDI(x1, x1, 1 << F_OF2), NEZ, EQZ, X_SF | X_OF)                        \
-        break;                                                                      \
-    case B + 0xE:                                                                   \
-        INST_NAME(T1 "LE " T2);                                                     \
-        GO(SRLI(x1, xFlags, F_SF - F_OF2);                                          \
-            XOR(x1, x1, xFlags);                                                    \
-            ANDI(x1, x1, 1 << F_OF2);                                               \
-            ANDI(x3, xFlags, 1 << F_ZF);                                            \
-            OR(x1, x1, x3);                                                         \
-            ANDI(x1, x1, (1 << F_OF2) | (1 << F_ZF)), EQZ, NEZ, X_SF | X_OF | X_ZF) \
-        break;                                                                      \
-    case B + 0xF:                                                                   \
-        INST_NAME(T1 "G " T2);                                                      \
-        GO(SRLI(x1, xFlags, F_SF - F_OF2);                                          \
-            XOR(x1, x1, xFlags);                                                    \
-            ANDI(x1, x1, 1 << F_OF2);                                               \
-            ANDI(x3, xFlags, 1 << F_ZF);                                            \
-            OR(x1, x1, x3);                                                         \
-            ANDI(x1, x1, (1 << F_OF2) | (1 << F_ZF)), NEZ, EQZ, X_SF | X_OF | X_ZF) \
+#define GOCOND(B, T1, T2)                                                                   \
+    case B + 0x0:                                                                           \
+        INST_NAME(T1 "O " T2);                                                              \
+        GO(ANDI(x1, xFlags, 1 << F_OF2), EQZ, NEZ, _, _, X_OF)                              \
+        break;                                                                              \
+    case B + 0x1:                                                                           \
+        INST_NAME(T1 "NO " T2);                                                             \
+        GO(ANDI(x1, xFlags, 1 << F_OF2), NEZ, EQZ, _, _, X_OF)                              \
+        break;                                                                              \
+    case B + 0x2:                                                                           \
+        INST_NAME(T1 "C " T2);                                                              \
+        GO(ANDI(x1, xFlags, 1 << F_CF), EQZ, NEZ, GEU, LTU, X_CF)                           \
+        break;                                                                              \
+    case B + 0x3:                                                                           \
+        INST_NAME(T1 "NC " T2);                                                             \
+        GO(ANDI(x1, xFlags, 1 << F_CF), NEZ, EQZ, LTU, GEU, X_CF)                           \
+        break;                                                                              \
+    case B + 0x4:                                                                           \
+        INST_NAME(T1 "Z " T2);                                                              \
+        GO(ANDI(x1, xFlags, 1 << F_ZF), EQZ, NEZ, NE, EQ, X_ZF)                             \
+        break;                                                                              \
+    case B + 0x5:                                                                           \
+        INST_NAME(T1 "NZ " T2);                                                             \
+        GO(ANDI(x1, xFlags, 1 << F_ZF), NEZ, EQZ, EQ, NE, X_ZF)                             \
+        break;                                                                              \
+    case B + 0x6:                                                                           \
+        INST_NAME(T1 "BE " T2);                                                             \
+        GO(ANDI(x1, xFlags, (1 << F_CF) | (1 << F_ZF)), EQZ, NEZ, GTU, LEU, X_CF | X_ZF)    \
+        break;                                                                              \
+    case B + 0x7:                                                                           \
+        INST_NAME(T1 "NBE " T2);                                                            \
+        GO(ANDI(x1, xFlags, (1 << F_CF) | (1 << F_ZF)), NEZ, EQZ, LEU, GTU, X_CF | X_ZF)    \
+        break;                                                                              \
+    case B + 0x8:                                                                           \
+        INST_NAME(T1 "S " T2);                                                              \
+        GO(ANDI(x1, xFlags, 1 << F_SF), EQZ, NEZ, _, _, X_SF)                               \
+        break;                                                                              \
+    case B + 0x9:                                                                           \
+        INST_NAME(T1 "NS " T2);                                                             \
+        GO(ANDI(x1, xFlags, 1 << F_SF), NEZ, EQZ, _, _, X_SF)                               \
+        break;                                                                              \
+    case B + 0xA:                                                                           \
+        INST_NAME(T1 "P " T2);                                                              \
+        GO(ANDI(x1, xFlags, 1 << F_PF), EQZ, NEZ, _, _, X_PF)                               \
+        break;                                                                              \
+    case B + 0xB:                                                                           \
+        INST_NAME(T1 "NP " T2);                                                             \
+        GO(ANDI(x1, xFlags, 1 << F_PF), NEZ, EQZ, _, _, X_PF)                               \
+        break;                                                                              \
+    case B + 0xC:                                                                           \
+        INST_NAME(T1 "L " T2);                                                              \
+        GO(SRLI(x1, xFlags, F_SF - F_OF2);                                                  \
+            XOR(x1, x1, xFlags);                                                            \
+            ANDI(x1, x1, 1 << F_OF2), EQZ, NEZ, GE, LT, X_SF | X_OF)                        \
+        break;                                                                              \
+    case B + 0xD:                                                                           \
+        INST_NAME(T1 "GE " T2);                                                             \
+        GO(SRLI(x1, xFlags, F_SF - F_OF2);                                                  \
+            XOR(x1, x1, xFlags);                                                            \
+            ANDI(x1, x1, 1 << F_OF2), NEZ, EQZ, LT, GE, X_SF | X_OF)                        \
+        break;                                                                              \
+    case B + 0xE:                                                                           \
+        INST_NAME(T1 "LE " T2);                                                             \
+        GO(SRLI(x1, xFlags, F_SF - F_OF2);                                                  \
+            XOR(x1, x1, xFlags);                                                            \
+            ANDI(x1, x1, 1 << F_OF2);                                                       \
+            ANDI(x3, xFlags, 1 << F_ZF);                                                    \
+            OR(x1, x1, x3);                                                                 \
+            ANDI(x1, x1, (1 << F_OF2) | (1 << F_ZF)), EQZ, NEZ, GT, LE, X_SF | X_OF | X_ZF) \
+        break;                                                                              \
+    case B + 0xF:                                                                           \
+        INST_NAME(T1 "G " T2);                                                              \
+        GO(SRLI(x1, xFlags, F_SF - F_OF2);                                                  \
+            XOR(x1, x1, xFlags);                                                            \
+            ANDI(x1, x1, 1 << F_OF2);                                                       \
+            ANDI(x3, xFlags, 1 << F_ZF);                                                    \
+            OR(x1, x1, x3);                                                                 \
+            ANDI(x1, x1, (1 << F_OF2) | (1 << F_ZF)), NEZ, EQZ, LE, GT, X_SF | X_OF | X_ZF) \
         break
+
+// Dummy macros
+#define B__safe(a, b, c) XOR(xZR, xZR, xZR)
+#define B_(a, b, c)      XOR(xZR, xZR, xZR)
+
+#define NATIVEJUMP_safe(COND, val) \
+    B##COND##_safe(dyn->insts[ninst].nat_flags_op1, dyn->insts[ninst].nat_flags_op2, val);
+
+#define NATIVEJUMP(COND, val) \
+    B##COND(dyn->insts[ninst].nat_flags_op1, dyn->insts[ninst].nat_flags_op2, val);
 
 #define NOTEST(s1)                                     \
     if (box64_dynarec_test) {                          \
@@ -1777,35 +1803,35 @@ uintptr_t dynarec64_AVX_F3_0F(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip,
 #define FCOMS(v1, v2, s1, s2, s3, s4, s5) FCOM(S, v1, v2, s1, s2, s3, s4, s5)
 #define FCOMD(v1, v2, s1, s2, s3, s4, s5) FCOM(D, v1, v2, s1, s2, s3, s4, s5)
 
-#define FCOMI(w, v1, v2, s1, s2, s3, s4, s5)                    \
-    IFX(X_OF|X_AF|X_SF|X_PEND) {                                \
-        MOV64x(s2, ~((1<<F_OF2)|(1<<F_AF)|(1<<F_SF)));          \
-        AND(xFlags, xFlags, s2);                                \
-    }                                                           \
-    IFX(X_CF|X_PF|X_ZF|X_PEND) {                                \
-        MOV32w(s2, 0b01000101);                                 \
-        if(rv64_zbb) {                                          \
-            ANDN(xFlags, xFlags, s2);                           \
-        } else {                                                \
-            NOT(s3, s2);                                        \
-            AND(xFlags, xFlags, s3);                            \
-        }                                                       \
-        FEQ##w(s5, v1, v1);                                     \
-        FEQ##w(s4, v2, v2);                                     \
-        AND(s5, s5, s4);                                        \
-        BEQZ(s5, 5*4); /* undefined/NaN */                      \
-        FEQ##w(s5, v1, v2);                                     \
-        BNEZ(s5, 5*4);       /* equal */                        \
-        FLT##w(s1, v1, v2); /* s1 = (v1<v2)?1:0 */              \
-        J(4*4); /* end */                                       \
-        /* undefined/NaN */                                     \
-        MV(s1, s2);                                             \
-        J(2*4); /* end */                                       \
-        /* equal */                                             \
-        ADDI(s1, xZR, 0b01000000);                              \
-        /* end */                                               \
-        OR(xFlags, xFlags, s1);                                 \
-    }                                                           \
+#define FCOMI(w, v1, v2, s1, s2, s3, s4, s5)                     \
+    IFX (X_OF | X_AF | X_SF | X_PEND) {                          \
+        MOV64x(s2, ~((1 << F_OF2) | (1 << F_AF) | (1 << F_SF))); \
+        AND(xFlags, xFlags, s2);                                 \
+    }                                                            \
+    IFX (X_CF | X_PF | X_ZF | X_PEND) {                          \
+        MOV32w(s2, 0b01000101);                                  \
+        if (rv64_zbb) {                                          \
+            ANDN(xFlags, xFlags, s2);                            \
+        } else {                                                 \
+            NOT(s3, s2);                                         \
+            AND(xFlags, xFlags, s3);                             \
+        }                                                        \
+        FEQ##w(s5, v1, v1);                                      \
+        FEQ##w(s4, v2, v2);                                      \
+        AND(s5, s5, s4);                                         \
+        BEQZ(s5, 5 * 4); /* undefined/NaN */                     \
+        FEQ##w(s5, v1, v2);                                      \
+        BNEZ(s5, 5 * 4);    /* equal */                          \
+        FLT##w(s1, v1, v2); /* s1 = (v1<v2)?1:0 */               \
+        J(4 * 4);           /* end */                            \
+        /* undefined/NaN */                                      \
+        MV(s1, s2);                                              \
+        J(2 * 4); /* end */                                      \
+        /* equal */                                              \
+        ADDI(s1, xZR, 0b01000000);                               \
+        /* end */                                                \
+        OR(xFlags, xFlags, s1);                                  \
+    }                                                            \
     SET_DFNONE()
 
 #define FCOMIS(v1, v2, s1, s2, s3, s4, s5) FCOMI(S, v1, v2, s1, s2, s3, s4, s5)
@@ -1823,54 +1849,54 @@ uintptr_t dynarec64_AVX_F3_0F(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip,
     BLT(reg, s, 4 + 4);           \
     ADDIW(reg, s, -1);
 
-#define FAST_8BIT_OPERATION(dst, src, s1, OP)                                        \
-    if (MODREG && (rv64_zbb || rv64_xtheadbb) && !dyn->insts[ninst].x64.gen_flags) { \
-        if (rex.rex) {                                                               \
-            wb = xRAX + (nextop & 7) + (rex.b << 3);                                 \
-            wb2 = 0;                                                                 \
-            gb = xRAX + ((nextop & 0x38) >> 3) + (rex.r << 3);                       \
-            gb2 = 0;                                                                 \
-        } else {                                                                     \
-            wb = (nextop & 7);                                                       \
-            wb2 = (wb >> 2) * 8;                                                     \
-            wb = xRAX + (wb & 3);                                                    \
-            gd = (nextop & 0x38) >> 3;                                               \
-            gb2 = ((gd & 4) >> 2) * 8;                                               \
-            gb = xRAX + (gd & 3);                                                    \
-        }                                                                            \
-        if (src##2) { ANDI(s1, src, 0xf00); }                                        \
-        SLLI(s1, (src##2 ? s1 : src), 64 - src##2 - 8);                              \
-        if (rv64_zbb) {                                                              \
-            RORI(dst, dst, 8 + dst##2);                                              \
-        } else {                                                                     \
-            TH_SRRI(dst, dst, 8 + dst##2);                                           \
-        }                                                                            \
-        OP;                                                                          \
-        if (rv64_zbb) {                                                              \
-            RORI(dst, dst, 64 - 8 - dst##2);                                         \
-        } else {                                                                     \
-            TH_SRRI(dst, dst, 64 - 8 - dst##2);                                      \
-        }                                                                            \
-        break;                                                                       \
+#define FAST_8BIT_OPERATION(dst, src, s1, OP)                                                                      \
+    if (!box64_dynarec_nativeflags && MODREG && (rv64_zbb || rv64_xtheadbb) && !dyn->insts[ninst].x64.gen_flags) { \
+        if (rex.rex) {                                                                                             \
+            wb = TO_NAT((nextop & 7) + (rex.b << 3));                                                              \
+            wb2 = 0;                                                                                               \
+            gb = TO_NAT(((nextop & 0x38) >> 3) + (rex.r << 3));                                                    \
+            gb2 = 0;                                                                                               \
+        } else {                                                                                                   \
+            wb = (nextop & 7);                                                                                     \
+            wb2 = (wb >> 2) * 8;                                                                                   \
+            wb = TO_NAT(wb & 3);                                                                                   \
+            gd = (nextop & 0x38) >> 3;                                                                             \
+            gb2 = ((gd & 4) >> 2) * 8;                                                                             \
+            gb = TO_NAT(gd & 3);                                                                                   \
+        }                                                                                                          \
+        if (src##2) { ANDI(s1, src, 0xf00); }                                                                      \
+        SLLI(s1, (src##2 ? s1 : src), 64 - src##2 - 8);                                                            \
+        if (rv64_zbb) {                                                                                            \
+            RORI(dst, dst, 8 + dst##2);                                                                            \
+        } else {                                                                                                   \
+            TH_SRRI(dst, dst, 8 + dst##2);                                                                         \
+        }                                                                                                          \
+        OP;                                                                                                        \
+        if (rv64_zbb) {                                                                                            \
+            RORI(dst, dst, 64 - 8 - dst##2);                                                                       \
+        } else {                                                                                                   \
+            TH_SRRI(dst, dst, 64 - 8 - dst##2);                                                                    \
+        }                                                                                                          \
+        break;                                                                                                     \
     }
 
-#define FAST_16BIT_OPERATION(dst, src, s1, OP)                                       \
-    if (MODREG && (rv64_zbb || rv64_xtheadbb) && !dyn->insts[ninst].x64.gen_flags) { \
-        gd = xRAX + ((nextop & 0x38) >> 3) + (rex.r << 3);                           \
-        ed = xRAX + (nextop & 7) + (rex.b << 3);                                     \
-        SLLI(s1, src, 64 - 16);                                                      \
-        if (rv64_zbb) {                                                              \
-            RORI(dst, dst, 16);                                                      \
-        } else {                                                                     \
-            TH_SRRI(dst, dst, 16);                                                   \
-        }                                                                            \
-        OP;                                                                          \
-        if (rv64_zbb) {                                                              \
-            RORI(dst, dst, 64 - 16);                                                 \
-        } else {                                                                     \
-            TH_SRRI(dst, dst, 64 - 16);                                              \
-        }                                                                            \
-        break;                                                                       \
+#define FAST_16BIT_OPERATION(dst, src, s1, OP)                                                                     \
+    if (!box64_dynarec_nativeflags && MODREG && (rv64_zbb || rv64_xtheadbb) && !dyn->insts[ninst].x64.gen_flags) { \
+        gd = TO_NAT(((nextop & 0x38) >> 3) + (rex.r << 3));                                                        \
+        ed = TO_NAT((nextop & 7) + (rex.b << 3));                                                                  \
+        SLLI(s1, src, 64 - 16);                                                                                    \
+        if (rv64_zbb) {                                                                                            \
+            RORI(dst, dst, 16);                                                                                    \
+        } else {                                                                                                   \
+            TH_SRRI(dst, dst, 16);                                                                                 \
+        }                                                                                                          \
+        OP;                                                                                                        \
+        if (rv64_zbb) {                                                                                            \
+            RORI(dst, dst, 64 - 16);                                                                               \
+        } else {                                                                                                   \
+            TH_SRRI(dst, dst, 64 - 16);                                                                            \
+        }                                                                                                          \
+        break;                                                                                                     \
     }
 
 #define VECTOR_SPLAT_IMM(vreg, imm, s1)                 \

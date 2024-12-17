@@ -79,7 +79,7 @@ int box64_dynarec_forced = 0;
 int box64_dynarec_bigblock = 1;
 int box64_dynarec_forward = 128;
 int box64_dynarec_strongmem = 0;
-int box64_dynarec_weakbarrier = 0;
+int box64_dynarec_weakbarrier = 1;
 int box64_dynarec_pause = 0;
 int box64_dynarec_x87double = 0;
 int box64_dynarec_div0 = 0;
@@ -551,7 +551,7 @@ HWCAP2_AFP
                 if (!strcasecmp(p, "xtheadba")) rv64_xtheadba = 0;
                 if (!strcasecmp(p, "xtheadbb")) rv64_xtheadbb = 0;
                 if (!strcasecmp(p, "xtheadbs")) rv64_xtheadbs = 0;
-                // if (!strcasecmp(p, "xtheadmemidx")) rv64_xtheadmemidx = 0;
+                if (!strcasecmp(p, "xtheadmemidx")) rv64_xtheadmemidx = 0;
                 // if (!strcasecmp(p, "xtheadfmemidx")) rv64_xtheadfmemidx = 0;
                 // if (!strcasecmp(p, "xtheadmac")) rv64_xtheadmac = 0;
                 // if (!strcasecmp(p, "xtheadfmv")) rv64_xtheadfmv = 0;
@@ -575,8 +575,8 @@ HWCAP2_AFP
     if(rv64_xtheadbs) printf_log(LOG_INFO, " XTheadBs");
     if (rv64_xtheadmempair) printf_log(LOG_INFO, " XTheadMemPair");
     if (rv64_xtheadcondmov) printf_log(LOG_INFO, " XTheadCondMov");
+    if (rv64_xtheadmemidx) printf_log(LOG_INFO, " XTheadMemIdx");
     // Disable the display since these are only detected but never used.
-    // if(rv64_xtheadmemidx) printf_log(LOG_INFO, " XTheadMemIdx");
     // if(rv64_xtheadfmemidx) printf_log(LOG_INFO, " XTheadFMemIdx");
     // if(rv64_xtheadmac) printf_log(LOG_INFO, " XTheadMac");
     // if(rv64_xtheadfmv) printf_log(LOG_INFO, " XTheadFmv");
@@ -592,10 +592,10 @@ void computeRDTSC()
     box64_rdtsc_shift = 0;
     #if defined(ARM64) || defined(RV64)
     hardware = 1;
-    box64_rdtsc = 0;    // allow hardxare counter
+    box64_rdtsc = 0;    // allow hardware counter
     #else
     box64_rdtsc = 1;
-    printf_log(LOG_INFO, "Will use time-based emulation for rdtsc, even if hardware counter are available\n");
+    printf_log(LOG_INFO, "Will use time-based emulation for RDTSC, even if hardware counters are available\n");
     #endif
     uint64_t freq = ReadTSCFrequency(NULL);
     if(freq<((box64_rdtsc_1ghz)?1000000000LL:1000000)) {
@@ -605,11 +605,11 @@ void computeRDTSC()
         freq = ReadTSCFrequency(NULL);
     }
     uint64_t efreq = freq;
-    while(efreq<2000000000 && box64_rdtsc_shift<31) {    // minium 2GHz, but not too much shift
+    while(efreq<2000000000 && box64_rdtsc_shift<31) {    // minimum 2GHz, but not too much shift
         ++box64_rdtsc_shift;
         efreq = freq<<box64_rdtsc_shift;
     }
-    printf_log(LOG_INFO, "Will use %s counter measured at ", box64_rdtsc?"Software":"Hardware");
+    printf_log(LOG_INFO, "Will use %s counter measured at ", box64_rdtsc?"software":"hardware");
     int ghz = freq>=1000000000LL;
     if(ghz) freq/=100000000LL; else freq/=100000;
     if(ghz) printf_log(LOG_INFO, "%d.%d GHz", freq/10, freq%10);
@@ -787,6 +787,8 @@ void LoadLogEnv()
         }
         if (box64_dynarec_weakbarrier)
             printf_log(LOG_INFO, "Dynarec will try to use weaker memory barriers to reduce the performance loss introduce by strong memory emulation\n");
+        else
+            printf_log(LOG_INFO, "Dynarec will not use weakbarrier on strong memory emulation\n");
     }
 #ifdef ARM64
     p = getenv("BOX64_DYNAREC_PAUSE");
@@ -798,6 +800,8 @@ void LoadLogEnv()
         if (box64_dynarec_pause)
             printf_log(LOG_INFO, "Dynarec will use %s to emulate pause instruction\n",
                 box64_dynarec_pause == 1 ? "yield" : (box64_dynarec_pause == 2 ? "wfi" : "wfe"));
+        else
+            printf_log(LOG_INFO, "Dynarec will generate nothing for the pause instuction\n");
     }
 #endif
     p = getenv("BOX64_DYNAREC_X87DOUBLE");
@@ -962,6 +966,9 @@ void LoadLogEnv()
             box64_dynarec_x87double = 1;
             box64_dynarec_div0 = 1;
             box64_dynarec_callret = 0;
+            #ifdef RV64
+            box64_dynarec_nativeflags = 0;
+            #endif
             printf_log(LOG_INFO, "Dynarec will compare it's execution with the interpreter (super slow, only for testing)\n");
         }
     }
@@ -1293,7 +1300,7 @@ void LoadLogEnv()
     // grab cpu name
     int ncpu = getNCpu();
     const char* cpuname = getCpuName();
-    printf_log(LOG_INFO, " PageSize:%zd Running on %s with %d Cores\n", box64_pagesize, cpuname, ncpu);
+    printf_log(LOG_INFO, " PageSize:%zd Running on %s with %d core%s\n", box64_pagesize, cpuname, ncpu, ncpu > 1 ? "s" : "");
     // grab and calibrate hardware counter
     computeRDTSC();
 }
@@ -1496,7 +1503,7 @@ void LoadEnvVars(box64context_t *context)
             printf_log(LOG_INFO, "\n");
         }
     }
-    // add libssl and libcrypto (and a few other) to prefer emulated version because of multiple version exist
+    // Add libssl and libcrypto (and a few others) to prefer the emulated version because multiple versions exist
     AddPath("libssl.so.1", &context->box64_emulated_libs, 0);
     AddPath("libssl.so.1.0.0", &context->box64_emulated_libs, 0);
     AddPath("libcrypto.so.1", &context->box64_emulated_libs, 0);
@@ -1613,6 +1620,10 @@ void LoadLDPath(box64context_t *context)
             AddPath("/usr/lib/box64-i386-linux-gnu", &context->box64_ld_lib, 1);
         if(FileExist("/data/data/com.termux/files/usr/glibc/lib/i386-linux-gnu", 0))
             AddPath("/data/data/com.termux/files/usr/glibc/lib/i386-linux-gnu", &context->box64_ld_lib, 1);
+        if(FileExist("/data/data/com.termux/files/usr/glibc/lib/box64-i386-linux-gnu", 0))
+            AddPath("/data/data/com.termux/files/usr/glibc/lib/box64-i386-linux-gnu", &context->box64_ld_lib, 1);
+        if(FileExist("/data/data/com.termux/files/usr/lib/box64-i386-linux-gnu", 0))
+            AddPath("/data/data/com.termux/files/usr/lib/box64-i386-linux-gnu", &context->box64_ld_lib, 1);
         #endif
     } else {
         if(FileExist("/lib/x86_64-linux-gnu", 0))
@@ -1625,6 +1636,10 @@ void LoadLDPath(box64context_t *context)
             AddPath("/usr/lib/box64-x86_64-linux-gnu", &context->box64_ld_lib, 1);
         if(FileExist("/data/data/com.termux/files/usr/glibc/lib/x86_64-linux-gnu", 0))
             AddPath("/data/data/com.termux/files/usr/glibc/lib/x86_64-linux-gnu", &context->box64_ld_lib, 1);
+        if(FileExist("/data/data/com.termux/files/usr/glibc/lib/box64-x86_64-linux-gnu", 0))
+            AddPath("/data/data/com.termux/files/usr/glibc/lib/box64-x86_64-linux-gnu", &context->box64_ld_lib, 1);
+        if(FileExist("/data/data/com.termux/files/usr/lib/box64-x86_64-linux-gnu", 0))
+            AddPath("/data/data/com.termux/files/usr/lib/box64-x86_64-linux-gnu", &context->box64_ld_lib, 1);
     }
     #else
     //TODO: Add Termux Library Path - Lily
@@ -2248,7 +2263,7 @@ int initialize(int argc, const char **argv, char** env, x64emu_t** emulator, elf
     }
     // check if file exist
     if(!my_context->argv[0] || !FileExist(my_context->argv[0], IS_FILE)) {
-        printf_log(LOG_NONE, "Error: File is not found. (check BOX64_PATH)\n");
+        printf_log(LOG_NONE, "Error: File is not found. (%s)\n", my_context->argv[0]);
         free_contextargv();
         FreeBox64Context(&my_context);
         FreeCollection(&ld_preload);

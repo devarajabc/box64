@@ -85,7 +85,7 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
                 case 0xE6:
                 case 0xE7:
                     INST_NAME("SMSW Ed");
-                    ed = xRAX+(nextop&7)+(rex.b<<3);
+                    ed = TO_NAT((nextop & 7) + (rex.b << 3));
                     MOV32w(ed, (1<<0) | (1<<4)); // only PE and ET set...
                     break;
                 case 0xF9:
@@ -165,7 +165,11 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
 
         case 0x09:
             INST_NAME("WBINVD");
-            SETFLAGS(X_ALL, SF_SET_NODF);    // Hack to set flags in "don't care" state
+            if(box64_dynarec_safeflags>1) {
+                READFLAGS(X_PEND);
+            } else {
+                SETFLAGS(X_ALL, SF_SET_NODF);    // Hack to set flags in "don't care" state
+            }
             GETIP(ip);
             STORE_XEMU_CALL(xRIP);
             CALL(native_ud, -1);
@@ -177,7 +181,11 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
 
         case 0x0B:
             INST_NAME("UD2");
-            SETFLAGS(X_ALL, SF_SET_NODF);    // Hack to set flags in "don't care" state
+            if(box64_dynarec_safeflags>1) {
+                READFLAGS(X_PEND);
+            } else {
+                SETFLAGS(X_ALL, SF_SET_NODF);    // Hack to set flags in "don't care" state
+            }
             GETIP(ip);
             STORE_XEMU_CALL(xRIP);
             CALL(native_ud, -1);
@@ -212,7 +220,11 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
             break;
         case 0x0E:
             INST_NAME("femms");
-            SETFLAGS(X_ALL, SF_SET_NODF);    // Hack to set flags in "don't care" state
+            if(box64_dynarec_safeflags>1) {
+                READFLAGS(X_PEND);
+            } else {
+                SETFLAGS(X_ALL, SF_SET_NODF);    // Hack to set flags in "don't care" state
+            }
             GETIP(ip);
             STORE_XEMU_CALL(xRIP);
             CALL(native_ud, -1);
@@ -499,11 +511,15 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
             GETGX(v0, 0);
             GETEXSS(s0, 0, 0);
             FCMPS(v0, s0);
-            FCOMI(x1, x2);
+            FCOMI(x1, x2, 0, v0, s0, 1);    // disabled precise cmp
             break;
         case 0x30:
             INST_NAME("WRMSR");
-            SETFLAGS(X_ALL, SF_SET_NODF);    // Hack to set flags in "don't care" state
+            if(box64_dynarec_safeflags>1) {
+                READFLAGS(X_PEND);
+            } else {
+                SETFLAGS(X_ALL, SF_SET_NODF);    // Hack to set flags in "don't care" state
+            }
             GETIP(ip);
             STORE_XEMU_CALL(xRIP);
             CALL(native_priv, -1);
@@ -856,7 +872,7 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
                     nextop=F8;
                     GETGD;
                     if(MODREG) {
-                        REVxw(gd, xRAX+(nextop&7)+(rex.b<<3));
+                        REVxw(gd, TO_NAT((nextop & 7) + (rex.b << 3)));
                     } else {
                         SMREAD();
                         addr = geted(dyn, addr, ninst, nextop, &ed, x2, &fixedaddress, &unscaled, 0xfff<<(2+rex.w), (1<<(2+rex.w))-1, rex, NULL, 0, 0);
@@ -869,7 +885,7 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
                     nextop=F8;
                     GETGD;
                     if(MODREG) {   // reg <= reg
-                        REVxw(xRAX+(nextop&7)+(rex.b<<3), gd);
+                        REVxw(TO_NAT((nextop & 7) + (rex.b << 3)), gd);
                     } else {                    // mem <= reg
                         addr = geted(dyn, addr, ninst, nextop, &ed, x2, &fixedaddress, &unscaled, 0xfff<<(2+rex.w), (1<<(2+rex.w))-1, rex, NULL, 0, 0);
                         REVxw(x1, gd);
@@ -979,19 +995,19 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
             }
             break;
 
-        #define GO(GETFLAGS, NO, YES, F)            \
-            READFLAGS(F);                           \
-            GETFLAGS;                               \
-            nextop=F8;                              \
-            GETGD;                                  \
-            if(MODREG) {                            \
-                ed = xRAX+(nextop&7)+(rex.b<<3);    \
-                CSELxw(gd, ed, gd, YES);            \
-            } else { \
-                addr = geted(dyn, addr, ninst, nextop, &ed, x2, &fixedaddress, &unscaled, 0xfff<<(2+rex.w), (1<<(2+rex.w))-1, rex, NULL, 0, 0); \
-                Bcond(NO, +8);                      \
-                LDxw(gd, ed, fixedaddress);         \
-                if(!rex.w) {MOVw_REG(gd, gd);}      \
+        #define GO(GETFLAGS, NO, YES, F)                                                                                                                  \
+            READFLAGS(F);                                                                                                                                 \
+            GETFLAGS;                                                                                                                                     \
+            nextop = F8;                                                                                                                                  \
+            GETGD;                                                                                                                                        \
+            if (MODREG) {                                                                                                                                 \
+                ed = TO_NAT((nextop & 7) + (rex.b << 3));                                                                                                 \
+                CSELxw(gd, ed, gd, YES);                                                                                                                  \
+            } else {                                                                                                                                      \
+                addr = geted(dyn, addr, ninst, nextop, &ed, x2, &fixedaddress, &unscaled, 0xfff << (2 + rex.w), (1 << (2 + rex.w)) - 1, rex, NULL, 0, 0); \
+                Bcond(NO, +8);                                                                                                                            \
+                LDxw(gd, ed, fixedaddress);                                                                                                               \
+                if (!rex.w) { MOVw_REG(gd, gd); }                                                                                                         \
             }
 
         GOCOND(0x40, "CMOV", "Gd, Ed");
@@ -1284,7 +1300,7 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
             gd = (nextop&0x38)>>3;
             v0 = mmx_get_reg_empty(dyn, ninst, x1, x2, x3, gd);
             if(MODREG) {
-                ed = xRAX + (nextop&7) + (rex.b<<3);
+                ed = TO_NAT((nextop & 0x07) + (rex.b << 3));
                 if(rex.w) {
                     FMOVDx(v0, ed);
                 } else {
@@ -1533,7 +1549,7 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
             nextop = F8;
             GETGM(v0);
             if((nextop&0xC0)==0xC0) {
-                ed = xRAX + (nextop&7) + (rex.b<<3);
+                ed = TO_NAT((nextop & 0x07) + (rex.b << 3));
                 if(rex.w) {
                     FMOVxD(ed, v0);
                 } else {
@@ -1599,25 +1615,25 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
         GOCOND(0x80, "J", "Id");
         #undef GO
 
-        #define GO(GETFLAGS, NO, YES, F)                \
-            READFLAGS(F);                               \
-            GETFLAGS;                                   \
-            nextop=F8;                                  \
-            CSETw(x3, YES);                             \
-            if(MODREG) {                                \
-                if(rex.rex) {                           \
-                    eb1= xRAX+(nextop&7)+(rex.b<<3);    \
-                    eb2 = 0;                            \
-                } else {                                \
-                    ed = (nextop&7);                    \
-                    eb2 = (ed>>2)*8;                    \
-                    eb1 = xRAX+(ed&3);                  \
-                }                                       \
-                BFIx(eb1, x3, eb2, 8);                  \
-            } else {                                    \
+        #define GO(GETFLAGS, NO, YES, F)                                                                              \
+            READFLAGS(F);                                                                                             \
+            GETFLAGS;                                                                                                 \
+            nextop = F8;                                                                                              \
+            CSETw(x3, YES);                                                                                           \
+            if (MODREG) {                                                                                             \
+                if (rex.rex) {                                                                                        \
+                eb1 = TO_NAT((nextop & 7) + (rex.b << 3));                                                            \
+                eb2 = 0;                                                                                              \
+                } else {                                                                                              \
+                ed = (nextop & 7);                                                                                    \
+                eb2 = (ed >> 2) * 8;                                                                                  \
+                eb1 = TO_NAT (ed & 3);                                                                                \
+                }                                                                                                     \
+                BFIx(eb1, x3, eb2, 8);                                                                                \
+            } else {                                                                                                  \
                 addr = geted(dyn, addr, ninst, nextop, &ed, x2, &fixedaddress, &unscaled, 0xfff, 0, rex, NULL, 0, 0); \
-                STB(x3, ed, fixedaddress);              \
-                SMWRITE();                              \
+                STB(x3, ed, fixedaddress);                                                                            \
+                SMWRITE();                                                                                            \
             }
 
         GOCOND(0x90, "SET", "Eb");
@@ -1641,12 +1657,12 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
             break;
         case 0xA3:
             INST_NAME("BT Ed, Gd");
-            SETFLAGS(X_CF, SF_SUBSET);
+            SETFLAGS(X_ALL&~X_ZF, SF_SUBSET);
             SET_DFNONE(x1);
             nextop = F8;
             GETGD;
             if(MODREG) {
-                ed = xRAX+(nextop&7)+(rex.b<<3);
+                ed = TO_NAT((nextop & 7) + (rex.b << 3));
             } else {
                 SMREAD();
                 addr = geted(dyn, addr, ninst, nextop, &wback, x3, &fixedaddress, &unscaled, 0xfff<<(2+rex.w), (1<<(2+rex.w))-1, rex, NULL, 0, 0);
@@ -1664,6 +1680,12 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
                 }
                 LSRxw_REG(x4, ed, x2);
                 BFIw(xFlags, x4, F_CF, 1);
+            }
+            if(box64_dynarec_test) {
+                IFX(X_OF) {BFCw(xFlags, F_OF, 1);}
+                IFX(X_SF) {BFCw(xFlags, F_SF, 1);}
+                IFX(X_AF) {BFCw(xFlags, F_AF, 1);}
+                IFX(X_PF) {BFCw(xFlags, F_PF, 1);}
             }
             break;
         case 0xA4:
@@ -1714,12 +1736,12 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
 
         case 0xAB:
             INST_NAME("BTS Ed, Gd");
-            SETFLAGS(X_CF, SF_SUBSET);
+            SETFLAGS(X_ALL&~X_ZF, SF_SUBSET);
             SET_DFNONE(x1);
             nextop = F8;
             GETGD;
             if(MODREG) {
-                ed = xRAX+(nextop&7)+(rex.b<<3);
+                ed = TO_NAT((nextop & 7) + (rex.b << 3));
                 wback = 0;
             } else {
                 SMREAD();
@@ -1744,8 +1766,14 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
             LSLxw_REG(x4, x4, x2);
             ORRxw_REG(ed, ed, x4);
             if(wback) {
-                STRxw_U12(ed, wback, fixedaddress);
+                STxw(ed, wback, fixedaddress);
                 SMWRITE();
+            }
+            if(box64_dynarec_test) {
+                IFX(X_OF) {BFCw(xFlags, F_OF, 1);}
+                IFX(X_SF) {BFCw(xFlags, F_SF, 1);}
+                IFX(X_AF) {BFCw(xFlags, F_AF, 1);}
+                IFX(X_PF) {BFCw(xFlags, F_PF, 1);}
             }
             break;
         case 0xAC:
@@ -1932,7 +1960,7 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
             nextop = F8;
             GETGD;
             if(MODREG) {
-                ed = xRAX+(nextop&7)+(rex.b<<3);
+                ed = TO_NAT((nextop & 7) + (rex.b << 3));
                 wback = 0;
                 UFLAG_IF {emit_cmp32(dyn, ninst, rex, xRAX, ed, x3, x4, x5);}
                 MOVxw_REG(x1, ed);  // save value
@@ -1954,12 +1982,12 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
 
         case 0xB3:
             INST_NAME("BTR Ed, Gd");
-            SETFLAGS(X_CF, SF_SUBSET);
+            SETFLAGS(X_ALL&~X_ZF, SF_SUBSET);
             SET_DFNONE(x1);
             nextop = F8;
             GETGD;
             if(MODREG) {
-                ed = xRAX+(nextop&7)+(rex.b<<3);
+                ed = TO_NAT((nextop & 7) + (rex.b << 3));
                 wback = 0;
             } else {
                 SMREAD();
@@ -1984,8 +2012,14 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
             LSLxw_REG(x4, x4, x2);
             BICxw_REG(ed, ed, x4);
             if(wback) {
-                STRxw_U12(ed, wback, fixedaddress);
+                STxw(ed, wback, fixedaddress);
                 SMWRITE();
+            }
+            if(box64_dynarec_test) {
+                IFX(X_OF) {BFCw(xFlags, F_OF, 1);}
+                IFX(X_SF) {BFCw(xFlags, F_SF, 1);}
+                IFX(X_AF) {BFCw(xFlags, F_AF, 1);}
+                IFX(X_PF) {BFCw(xFlags, F_PF, 1);}
             }
             break;
 
@@ -1995,11 +2029,11 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
             GETGD;
             if(MODREG) {
                 if(rex.rex) {
-                    eb1 = xRAX+(nextop&7)+(rex.b<<3);
+                    eb1 = TO_NAT((nextop & 7) + (rex.b << 3));
                     eb2 = 0;                \
                 } else {
                     ed = (nextop&7);
-                    eb1 = xRAX+(ed&3);  // Ax, Cx, Dx or Bx
+                    eb1 = TO_NAT(ed&3);  // Ax, Cx, Dx or Bx
                     eb2 = (ed&4)>>2;    // L or H
                 }
                 UBFXxw(gd, eb1, eb2*8, 8);
@@ -2014,7 +2048,7 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
             nextop = F8;
             GETGD;
             if(MODREG) {
-                ed = xRAX+(nextop&7)+(rex.b<<3);
+                ed = TO_NAT((nextop & 7) + (rex.b << 3));
                 UBFXxw(gd, ed, 0, 16);
             } else {
                 SMREAD();
@@ -2028,11 +2062,11 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
             switch((nextop>>3)&7) {
                 case 4:
                     INST_NAME("BT Ed, Ib");
-                    SETFLAGS(X_CF, SF_SUBSET);
+                    SETFLAGS(X_ALL&~X_ZF, SF_SUBSET);
                     SET_DFNONE(x1);
                     gd = x2;
                     if(MODREG) {
-                        ed = xRAX+(nextop&7)+(rex.b<<3);
+                        ed = TO_NAT((nextop & 7) + (rex.b << 3));
                     } else {
                         SMREAD();
                         addr = geted(dyn, addr, ninst, nextop, &wback, x3, &fixedaddress, &unscaled, 0xfff<<(2+rex.w), (1<<(2+rex.w))-1, rex, NULL, 0, 1);
@@ -2041,14 +2075,22 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
                     }
                     u8 = F8;
                     u8&=rex.w?0x3f:0x1f;
-                    BFXILxw(xFlags, ed, u8, 1);  // inject 1 bit from u8 to F_CF (i.e. pos 0)
+                    IFX(X_CF) {
+                        BFXILxw(xFlags, ed, u8, 1);  // inject 1 bit from u8 to F_CF (i.e. pos 0)
+                    }
+                    if(box64_dynarec_test) {
+                        IFX(X_OF) {BFCw(xFlags, F_OF, 1);}
+                        IFX(X_SF) {BFCw(xFlags, F_SF, 1);}
+                        IFX(X_AF) {BFCw(xFlags, F_AF, 1);}
+                        IFX(X_PF) {BFCw(xFlags, F_PF, 1);}
+                    }
                     break;
                 case 5:
                     INST_NAME("BTS Ed, Ib");
-                    SETFLAGS(X_CF, SF_SUBSET);
+                    SETFLAGS(X_ALL&~X_ZF, SF_SUBSET);
                     SET_DFNONE(x1);
                     if(MODREG) {
-                        ed = xRAX+(nextop&7)+(rex.b<<3);
+                        ed = TO_NAT((nextop & 7) + (rex.b << 3));
                         wback = 0;
                     } else {
                         SMREAD();
@@ -2067,13 +2109,19 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
                         STxw(ed, wback, fixedaddress);
                         SMWRITE();
                     }
+                    if(box64_dynarec_test) {
+                        IFX(X_OF) {BFCw(xFlags, F_OF, 1);}
+                        IFX(X_SF) {BFCw(xFlags, F_SF, 1);}
+                        IFX(X_AF) {BFCw(xFlags, F_AF, 1);}
+                        IFX(X_PF) {BFCw(xFlags, F_PF, 1);}
+                    }
                     break;
                 case 6:
                     INST_NAME("BTR Ed, Ib");
-                    SETFLAGS(X_CF, SF_SUBSET);
+                    SETFLAGS(X_ALL&~X_ZF, SF_SUBSET);
                     SET_DFNONE(x1);
                     if(MODREG) {
-                        ed = xRAX+(nextop&7)+(rex.b<<3);
+                        ed = TO_NAT((nextop & 7) + (rex.b << 3));
                         wback = 0;
                     } else {
                         SMREAD();
@@ -2091,13 +2139,19 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
                         STxw(ed, wback, fixedaddress);
                         SMWRITE();
                     }
+                    if(box64_dynarec_test) {
+                        IFX(X_OF) {BFCw(xFlags, F_OF, 1);}
+                        IFX(X_SF) {BFCw(xFlags, F_SF, 1);}
+                        IFX(X_AF) {BFCw(xFlags, F_AF, 1);}
+                        IFX(X_PF) {BFCw(xFlags, F_PF, 1);}
+                    }
                     break;
                 case 7:
                     INST_NAME("BTC Ed, Ib");
-                    SETFLAGS(X_CF, SF_SUBSET);
+                    SETFLAGS(X_ALL&~X_ZF, SF_SUBSET);
                     SET_DFNONE(x1);
                     if(MODREG) {
-                        ed = xRAX+(nextop&7)+(rex.b<<3);
+                        ed = TO_NAT((nextop & 7) + (rex.b << 3));
                         wback = 0;
                     } else {
                         SMREAD();
@@ -2116,6 +2170,12 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
                         STxw(ed, wback, fixedaddress);
                         SMWRITE();
                     }
+                    if(box64_dynarec_test) {
+                        IFX(X_OF) {BFCw(xFlags, F_OF, 1);}
+                        IFX(X_SF) {BFCw(xFlags, F_SF, 1);}
+                        IFX(X_AF) {BFCw(xFlags, F_AF, 1);}
+                        IFX(X_PF) {BFCw(xFlags, F_PF, 1);}
+                    }
                     break;
                 default:
                     DEFAULT;
@@ -2123,12 +2183,12 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
             break;
         case 0xBB:
             INST_NAME("BTC Ed, Gd");
-            SETFLAGS(X_CF, SF_SUBSET);
+            SETFLAGS(X_ALL&~X_ZF, SF_SUBSET);
             SET_DFNONE(x1);
             nextop = F8;
             GETGD;
             if(MODREG) {
-                ed = xRAX+(nextop&7)+(rex.b<<3);
+                ed = TO_NAT((nextop & 7) + (rex.b << 3));
                 wback = 0;
             } else {
                 SMREAD();
@@ -2155,6 +2215,12 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
             if(wback) {
                 STxw(ed, wback, fixedaddress);
                 SMWRITE();
+            }
+            if(box64_dynarec_test) {
+                IFX(X_OF) {BFCw(xFlags, F_OF, 1);}
+                IFX(X_SF) {BFCw(xFlags, F_SF, 1);}
+                IFX(X_AF) {BFCw(xFlags, F_AF, 1);}
+                IFX(X_PF) {BFCw(xFlags, F_PF, 1);}
             }
             break;
         case 0xBC:
@@ -2210,12 +2276,12 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
             GETGD;
             if(MODREG) {
                 if(rex.rex) {
-                    wback = xRAX+(nextop&7)+(rex.b<<3);
+                    wback = TO_NAT((nextop & 7) + (rex.b << 3));
                     wb2 = 0;
                 } else {
                     wback = (nextop&7);
                     wb2 = (wback>>2)*8;
-                    wback = xRAX+(wback&3);
+                    wback = TO_NAT(wback&3);
                 }
                 SBFXxw(gd, wback, wb2, 8);
             } else {
@@ -2229,7 +2295,7 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
             nextop = F8;
             GETGD;
             if(MODREG) {
-                ed = xRAX+(nextop&7)+(rex.b<<3);
+                ed = TO_NAT((nextop & 7) + (rex.b << 3));
                 SXTHxw(gd, ed);
             } else {
                 SMREAD();
@@ -2296,7 +2362,7 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
             nextop=F8;
             GETGD;
             if(MODREG) {   // reg <= reg
-                MOVxw_REG(xRAX+(nextop&7)+(rex.b<<3), gd);
+                MOVxw_REG(TO_NAT((nextop & 7) + (rex.b << 3)), gd);
             } else {                    // mem <= reg
                 addr = geted(dyn, addr, ninst, nextop, &ed, x2, &fixedaddress, &unscaled, 0xfff<<(2+rex.w), (1<<(2+rex.w))-1, rex, NULL, 0, 0);
                 STxw(gd, ed, fixedaddress);
@@ -2308,7 +2374,7 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
             GETGM(v0);
             if(MODREG) {
                 u8 = (F8)&3;
-                ed = xRAX+(nextop&7)+(rex.b<<3);
+                ed = TO_NAT((nextop & 7) + (rex.b << 3));
                 VMOVQHfrom(v0, u8, ed);
             } else {
                 addr = geted(dyn, addr, ninst, nextop, &wback, x3, &fixedaddress, NULL, 0, 0, rex, NULL, 0, 1);
@@ -2472,7 +2538,7 @@ uintptr_t dynarec64_0F(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip, int nin
         case 0xCE:
         case 0xCF:                  /* BSWAP reg */
             INST_NAME("BSWAP Reg");
-            gd = xRAX+(opcode&7)+(rex.b<<3);
+            gd = TO_NAT((opcode&7)+(rex.b<<3));
             REVxw(gd, gd);
             break;
         case 0xD1:

@@ -124,7 +124,15 @@
 // rd = rs1 - rs2
 #define SUBxw(rd, rs1, rs2) EMIT(R_type(0b0100000, rs2, rs1, 0b000, rd, rex.w ? 0b0110011 : 0b0111011))
 // rd = rs1 - rs2
-#define SUBz(rd, rs1, rs2) EMIT(R_type(0b0100000, rs2, rs1, 0b000, rd, rex.is32bits ? 0b0111011 : 0b0110011))
+#define SUBz(rd, rs1, rs2)     \
+    do {                       \
+        if (!rex.is32bits) {   \
+            SUB(rd, rs1, rs2); \
+        } else {               \
+            SUB(rd, rs1, rs2); \
+            ZEROUP(rd);        \
+        }                      \
+    } while (0)
 // rd = rs1<<rs2
 #define SLL(rd, rs1, rs2) EMIT(R_type(0b0000000, rs2, rs1, 0b001, rd, 0b0110011))
 // rd = (rs1<rs2)?1:0
@@ -424,7 +432,15 @@
 // rd = rs1 + imm12
 #define ADDIxw(rd, rs1, imm12) EMIT(I_type((imm12) & 0b111111111111, rs1, 0b000, rd, rex.w ? 0b0010011 : 0b0011011))
 // rd = rs1 + imm12
-#define ADDIz(rd, rs1, imm12) EMIT(I_type((imm12) & 0b111111111111, rs1, 0b000, rd, rex.is32bits ? 0b0011011 : 0b0010011))
+#define ADDIz(rd, rs1, imm12)      \
+    do {                           \
+        if (!rex.is32bits) {       \
+            ADDI(rd, rs1, imm12);  \
+        } else {                   \
+            ADDIW(rd, rs1, imm12); \
+            ZEROUP(rd);            \
+        }                          \
+    } while (0)
 
 // rd = rs1 + (rs2 << imm2)
 #define ADDSL(rd, rs1, rs2, imm2, scratch) \

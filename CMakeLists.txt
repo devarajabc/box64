@@ -42,6 +42,7 @@ option(WITH_MOLD "Set to ON to use with mold" ${WITH_MOLD})
 option(BOX32 "Set to ON to add Linux 32bits support (experimental, do not use)" ${BOX32})
 option(BOX32_BINFMT "Also setup binfmt integration for box32" ${BOX32_BINFMT})
 option(LARCH64_ABI_1 "Set to ON if building for Loongarch64 ABI 1.0 system" ${LARCH64_ABI_1})
+option(GDBJIT "Set to ON to enable GDB JIT support" ${GDBJIT})
 
 if(TERMUX)
     set(TERMUX_PATH "/data/data/com.termux/files")
@@ -93,6 +94,11 @@ if(ANDROID)
     set(TERMUX_PATH "/data/data/com.termux/files")
     set(NOLOADADDR ON CACHE BOOL "")
     set(BAD_SIGNAL ON CACHE BOOL "")
+endif()
+
+if(GDBJIT)
+    message(STATUS "Build with GDBJIT support")
+    add_definitions(-DGDBJIT)
 endif()
 
 option(LD80BITS "Set to ON if host device have 80bits long double (i.e. i386)" ${LD80BITS})
@@ -386,6 +392,7 @@ set(ELFLOADER_SRC
     "${BOX64_ROOT}/src/tools/box64stack.c"
     "${BOX64_ROOT}/src/tools/bridge.c"
     "${BOX64_ROOT}/src/tools/callback.c"
+    "${BOX64_ROOT}/src/tools/gdbjit.c"
     "${BOX64_ROOT}/src/tools/my_cpuid.c"
     "${BOX64_ROOT}/src/tools/fileutils.c"
     "${BOX64_ROOT}/src/tools/pathcoll.c"
@@ -837,7 +844,7 @@ if(BOX32)
         "${BOX64_ROOT}/src/wrapped32/wrappedexpat.c"
         "${BOX64_ROOT}/src/wrapped32/wrappedlibx11xcb.c"
         "${BOX64_ROOT}/src/wrapped32/wrappedlibxcb.c"
-        #"${BOX64_ROOT}/src/wrapped32/wrappedlibxcbres.c"
+        "${BOX64_ROOT}/src/wrapped32/wrappedlibxcbres.c"
         "${BOX64_ROOT}/src/wrapped32/wrappedudev0.c"
         "${BOX64_ROOT}/src/wrapped32/wrappedudev1.c"
         "${BOX64_ROOT}/src/wrapped32/wrappedlibuuid.c"
@@ -1039,6 +1046,11 @@ if(LARCH64_DYNAREC)
     )
 endif()
 
+
+if(GDBJIT)
+set(GDBJITREADER "${BOX64_ROOT}/gdbjit/reader.c")
+endif()
+
 if(DYNAREC)
     set(DYNAREC_PASS
         "${BOX64_ROOT}/src/wrapped/generated/wrapper.h"
@@ -1082,6 +1094,10 @@ if(DYNAREC)
         $<TARGET_OBJECTS:native_pass3>
         $<TARGET_OBJECTS:test_interpreter>
     )
+
+    if(GDBJIT)
+        add_library(box64gdbjitreader SHARED ${GDBJITREADER})
+    endif()
 endif()
 
 # creates git_head.h
@@ -1120,7 +1136,7 @@ else()
         target_link_libraries(${BOX64} c m dl)
         endif()
     else()
-	    set_target_properties(${BOX64} PROPERTIES LINK_FLAGS "-Wl,--no-as-needed -lc -lm -ldl -lrt -lpthread -lresolv -lutil -Wl,--as-needed -pthread")
+	    set_property(TARGET ${BOX64} APPEND_STRING PROPERTY LINK_FLAGS "-Wl,--no-as-needed -lc -lm -ldl -lrt -lpthread -lresolv -lutil -Wl,--as-needed -pthread ")
     endif()
 endif()
 if(DYNAREC)
@@ -1131,9 +1147,9 @@ target_link_libraries(${BOX64} interpreter)
 if(${CMAKE_VERSION} VERSION_LESS "3.13")
     if(NOT NOLOADADDR)
         if(CMAKE_C_COMPILER_ID STREQUAL "Clang" OR WITH_MOLD)
-            set_target_properties(${BOX64} PROPERTIES LINK_FLAGS "-no-pie -Wl,--image-base=${BOX64_ELF_ADDRESS}")
+            set_property(TARGET ${BOX64} APPEND_STRING PROPERTY LINK_FLAGS "-no-pie -Wl,--image-base=${BOX64_ELF_ADDRESS} ")
         else()
-            set_target_properties(${BOX64} PROPERTIES LINK_FLAGS "-Wl,-Ttext-segment,${BOX64_ELF_ADDRESS}")
+            set_property(TARGET ${BOX64} APPEND_STRING PROPERTY LINK_FLAGS "-Wl,-Ttext-segment,${BOX64_ELF_ADDRESS} ")
         endif()
     endif()
 else()
@@ -1141,7 +1157,7 @@ else()
     if(NOT NOLOADADDR)
         if(CMAKE_C_COMPILER_ID STREQUAL "Clang" OR WITH_MOLD)
             if(WITH_MOLD) # --image-base requires -no-pie in mold!
-                set_target_properties(${BOX64} PROPERTIES LINK_FLAGS "-no-pie -lm")
+                set_property(TARGET ${BOX64} APPEND_STRING PROPERTY LINK_FLAGS "-no-pie -lm ")
             endif()
             target_link_options(${BOX64} PUBLIC LINKER:--image-base=${BOX64_ELF_ADDRESS})
         else()
@@ -1170,6 +1186,9 @@ if(NOT _x86 AND NOT _x86_64)
    if(NOT NO_LIB_INSTALL)
     install(PROGRAMS ${CMAKE_SOURCE_DIR}/tests/box64-bash DESTINATION ${TERMUX_PATH}/usr/bin)
    endif()
+  endif()
+  if (GDBJIT)
+    install(TARGETS box64gdbjitreader RUNTIME DESTINATION lib)
   endif()
   if(NOT NO_CONF_INSTALL)
     configure_file(system/box64.conf.cmake system/box64.conf)

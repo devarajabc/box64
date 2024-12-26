@@ -157,14 +157,14 @@ rb_t* rbtree_init(const char* name) {
     return tree;
 }
 
-static inline void delete_rbnode(rbnode *root) {
+static inline void delete_rbnode(rb_node_t *root) {
     if (!root) return;
-    delete_rbnode(root->left);
-    delete_rbnode(root->right);
+    delete_rbnode(get_child(root, RB_LEFT));
+    delete_rbnode(get_child(root, RB_RIGHT));
     rbtreeFree(root);
 }
 
-void rbtree_delete(rbtree_t *tree) {
+void rbtree_delete(rb_t *tree) {
     delete_rbnode(tree->root);
     rbtreeFree(tree);
 }

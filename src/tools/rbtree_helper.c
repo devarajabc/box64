@@ -172,6 +172,14 @@ void rbtree_delete(rbtree_t *tree) {
 static int remove_node(rb_t *tree, rb_node_t *node){
     rb_remove(tree, node);
 }
+static int add_range(rb_t *tree, uintptr_t start, uintptr_t end, uint64_t data){
+    rbnode *node = rbtreeMalloc(sizeof(*node));
+    if (!node) return -1;
+    node->start = start;
+    node->end = end;
+    node->data = data;
+    rb_insert(tree, node);
+}
 
 
 int rb_set(rb_t *tree, uintptr_t start, uintptr_t end, uint32_t data) {

@@ -1,0 +1,360 @@
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+#ifdef RBTREE_TEST
+#define rbtreeMalloc malloc
+#define rbtreeFree free
+#else
+#include "custommem.h"
+#include "debug.h"
+#include "rbtree.h"
+#include "rbtree_helper.h"
+
+#if 0
+#define rbtreeMalloc box_malloc
+#define rbtreeFree box_free
+#else
+#define rbtreeMalloc customMalloc
+#define rbtreeFree customFree
+#endif
+#endif
+
+bool compare (const rb_node_t *a, const rb_node_t *b)
+{
+    return get_start(a) < get_start(b) ? true : false;   
+}
+//Helper functions
+rb_t* rbtree_init(const char* name) {
+    rb_t* tree = rbtreeMalloc(sizeof(rb_t));
+    tree->root = NULL;
+    tree->cmp_func = 
+    tree->name = name?name:"(rbtree)";
+    return tree;
+}
+static inline rb_node_t *get_child(rb_node_t *n, rb_side_t side)
+{
+    if (side == RB_RIGHT)
+        return n->children[RB_RIGHT];
+
+    /* Mask out the least significant bit (LSB) to retrieve the actual left
+     * child pointer.
+     *
+     * The LSB of the left child pointer is used to store metadata (e.g., the
+     * color bit). By masking out the LSB with & ~1UL, the function retrieves
+     * the actual pointer value without the metadata bit, ensuring the correct
+     * child node is returned.
+     */
+    uintptr_t l = (uintptr_t) n->children[RB_LEFT];
+    l &= ~1UL;
+    return (rb_node_t *) l;
+}
+static inline uintptr_t get_start(rb_node_t *n)
+{
+    rbnode *Node = container_of(n, rbnode, node);
+    return Node->start;
+}
+
+static inline uintptr_t get_end(rb_node_t *n)
+{
+    rbnode *Node = container_of(n, rbnode, node);
+    return Node->end;
+}
+
+static inline uint32_t get_data(rb_node_t *n)
+{
+    rbnode *Node = container_of(n, rbnode, node);
+    return Node->data;
+}
+
+rb_node_t *__rb_get_local_minmax(rb_node_t *n, rb_side_t side)
+{
+    for ( ; n && get_child(n, side); n = get_child(n, side))
+        ;
+    return n;
+}
+
+static inline rb_node_t *rb_get_local_min(rb_node_t *n)
+{
+    return __rb_get_local_minmax(n, RB_LEFT);
+}
+
+static inline rb_node_t *rb_get_local_max(rb_node_t *n)
+{
+    return __rb_get_local_minmax(n, RB_RIGHT);
+}
+
+static rb_node_t *pred_node(rb_node_t *node) {
+    if (!node) return NULL;
+    if (node->children[RB_LEFT]) {//node->left
+        //node = node->left;
+        node = get_child(node, RB_LEFT);
+        return rb_get_local_max(node);
+    }
+    // else {
+    //    while (node->parent && node->meta & IS_LEFT) node = node->parent;
+    //    return node->parent;
+    //}
+}
+
+static rb_node_t *succ_node(rb_node_t *node) {
+    if (!node) return NULL;
+    if (node->children[RB_RIGHT]) {//node->right
+        //node = node->right;
+        node = get_child(node, RB_RIGHT);
+        return rb_get_local_min(node);
+    } 
+    //else {
+    // while (node->parent && !(node->meta & IS_LEFT)) node = node->parent;
+    //return node->parent;
+    //}
+}
+
+static rb_node_t *find_addr(rb_t *tree, uintptr_t addr) {
+    rb_node_t *node = tree->root;
+    while (node) {
+        if ((get_start(node) <= addr) && (get_end(node) > addr)) return node;
+        if (addr < get_start(node)) node = get_child(node, RB_LEFT);
+        else node = get_child(node, RB_RIGHT);
+    }
+    return NULL;
+}
+
+void adjacent_node(uintptr_t start, rb_node_t **node, rb_node_t **prev, rb_node_t **last){
+    //rb_node_t *node = tree->root, *prev = NULL, *last = NULL;
+    // Handle the "start" address => get three node : prev, node and last
+    // prev is the largest node starting strictly before start, or NULL if there is none
+    // node is the node starting exactly at start, or NULL if there is none
+    // last is the smallest node starting strictly after start, or NULL if there is none
+    // Note that prev may contain start
+    while (node) {
+        if (get_start(node) < start) {//if  node->start < start
+            prev = node;
+            node = get_child(node, RB_RIGHT); //node->right
+        } else if (get_start(node) == start) { // if node->start == start
+            if (node->children[RB_LEFT]) {// if node->left
+                prev = rb_get_local_min(node->children[RB_LEFT]);//get the local min of the left subtree
+            }
+            if (node->children[RB_RIGHT]) {
+                last = rb_get_local_max(node->children[RB_RIGHT]);//get the local max of the right subtree
+            }
+            break;
+        } else {
+            last = node;
+            node = get_child(node, RB_LEFT);//node->left
+        }
+    }
+}
+
+uintptr_t rb_get_righter(rb_t* tree){
+    dynarec_log(LOG_DEBUG, "rb_get_righter(%s);\n", tree->name);
+    if (!tree->root) return 0;
+    rb_node_t* node = rb_get_max(tree);
+    return get_start(node);
+}
+// Memory range management
+
+rb_t* rbtree_init(const char* name) {
+    rb_t* tree = rbtreeMalloc(sizeof(rb_t));
+    tree->root = NULL;
+    tree->cmp_func = &compare;
+    tree->name = name?name:"(rbtree)";
+    return tree;
+}
+
+static inline void delete_rbnode(rbnode *root) {
+    if (!root) return;
+    delete_rbnode(root->left);
+    delete_rbnode(root->right);
+    rbtreeFree(root);
+}
+
+void rbtree_delete(rbtree_t *tree) {
+    delete_rbnode(tree->root);
+    rbtreeFree(tree);
+}
+
+static int remove_node(rb_t *tree, rb_node_t *node){
+    rb_remove(tree, node);
+}
+
+
+int rb_set(rb_t *tree, uintptr_t start, uintptr_t end, uint32_t data) {
+dynarec_log(LOG_DEBUG, "set %s: 0x%lx, 0x%lx, 0x%x\n", tree->name, start, end, data);
+    if (!tree->root) {
+        return add_range(tree, start, end, data);
+    }
+    
+    rb_node_t *node = tree->root, *prev = NULL, *last = NULL;
+    adjacent_node(start, &node, &prev, &last);
+    if (prev && (get_end(prev) >= start) && (get_data(prev) == data)) {  
+        if (end <= get_end(prev)) return 0; // Nothing to do!
+        if (node && (get_end(node) > end)) {
+            node->start = end;
+            prev->end = end; 
+            return 0;
+        } else if (node && (node->end == end)) {
+            remove_node(tree, node);
+            prev->end = end;
+            return 0;
+        } else if (node) { 
+            remove_node(tree, node); //Included -> remove
+        }
+        //
+        // |--A--| |--B--| |--C--|
+        // |--------new----------|
+        //
+        while (last && (last->start < end) && (last->end <= end)) {
+            // Remove the entire node
+            node = last;
+            last = succ_node(last);
+            remove_node(tree, node);
+        }
+        if (last && (last->start <= end) && (last->data == data)) {
+            // Merge node and last
+            prev->end = last->end;
+            remove_node(tree, last);
+            return 0;
+        }
+        if (last && (last->start < end)) last->start = end;
+        prev->end = end;
+        return 0;
+        // "prev" and "new" share same data -> append "prev" 
+    } else if (prev && (prev->end > start)) {//case 2
+        if (prev->end > end) {
+            // Split in three
+            // Note that here, succ(prev) = last and node = NULL
+            int ret;
+            //
+            //  |----------prev------||----last----|
+            //          |--new--||-A-|   
+            //
+            ret = add_range_next_to(tree, prev->right ? last : prev, end, prev->end, prev->data);// Add A
+            ret = ret ? ret : add_range_next_to(tree, prev->right ? succ_node(prev) : prev, start, end, data);// succ_node(prev) == last ?
+            prev->end = start;
+            return ret;// whatch out if the "add_range_next_to" is false
+        }
+        // Cut prev and continue
+        prev->end = start;//prev->end < end
+    }
+
+    if (node) {
+        // Change node
+        if (node->end >= end) {
+            if (node->data == data) return 0; // Nothing to do!
+            // Cut node
+            if (node->end > end) {
+                int ret = add_range_next_to(tree, node->right ? last : node, end, node->end, node->data);
+                node->end = end;
+                node->data = data;
+                return ret;
+            }
+            // Fallthrough
+        }
+        
+        // Overwrite and extend node
+        while (last && (last->start < end) && (last->end <= end)) {
+            // Remove the entire node
+            prev = last;
+            last = succ_node(last);
+            remove_node(tree, prev);
+        }
+        if (last && (last->start <= end) && (last->data == data)) {
+            // Merge node and last
+            remove_node(tree, node);
+            last->start = start;
+            return 0;
+        }
+        if (last && (last->start < end)) last->start = end;
+        if (node->end < end) node->end = end;
+        node->data = data;
+        return 0;
+    }
+   
+
+    while (last && (last->start < end) && (last->end <= end)) {
+        // Remove the entire node
+        node = last;
+        last = succ_node(last);
+        remove_node(tree, node);
+    }
+    if (!last) {
+        // Add a new node next to prev, the largest node of the tree
+        // It exists since the tree is nonempty
+        return add_range_next_to(tree, prev, start, end, data);
+    }
+    if ((last->start <= end) && (last->data == data)) {
+        // Extend
+        last->start = start;
+        return 0;
+    } else if (last->start < end) {
+        // Cut
+        last->start = end;
+    }
+    // Probably 'last->left ? prev : last' is enough
+    return add_range_next_to(tree, last->left ? pred_node(last) : last, start, end, data);
+}
+
+int rb_unset(rbtree_t *tree, uintptr_t start, uintptr_t end) {
+// printf("rb_unset( "); rbtree_print(tree); printf(" , 0x%lx, 0x%lx);\n", start, end); fflush(stdout);
+dynarec_log(LOG_DEBUG, "unset: %s 0x%lx, 0x%lx);\n", tree->name, start, end);
+    if (!tree->root) return 0;
+
+    rbnode *node = tree->root, *prev = NULL, *next = NULL;
+    while (node) {
+        if (node->start < start) {
+            prev = node;
+            node = node->right;
+        } else if (node->start == start) {
+            if (node->left) {
+                prev = node->left;
+                while (prev->right) prev = prev->right;
+            }
+            if (node->right) {
+                next = node->right;
+                while (next->left) next = next->left;
+            }
+            break;
+        } else {
+            next = node;
+            node = node->left;
+        }
+    }
+
+    if (node) {
+        if (node->end > end) {
+            node->start = end;
+            return 0;
+        } else if (node->end == end) {
+            remove_node(tree, node);
+            return 0;
+        } else {
+            remove_node(tree, node);
+        }
+    } else if (prev && (prev->end > start)) {
+        if (prev->end > end) {
+            // Split prev
+            int ret = add_range_next_to(tree, prev->right ? next : prev, end, prev->end, prev->data);
+            prev->end = start;
+            return ret;
+        } else if (prev->end == end) {
+            prev->end = start;
+            return 0;
+        } // else fallthrough
+    }
+    while (next && (next->start < end) && (next->end <= end)) {
+        // Remove the entire node
+        node = next;
+        next = succ_node(next);
+        remove_node(tree, node);
+    }
+    if (next && (next->start < end)) {
+        // next->end > end: cut the node
+        next->start = end;
+    }
+    return 0;
+}
+
+
+

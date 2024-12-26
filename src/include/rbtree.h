@@ -1,253 +1,236 @@
 /*
- * The primary function of red-black trees in Box64 is to provide a fast and efficient method (O(log(n))) for managing memory mappings. 
- * Each red-black tree node includes two additional pointers, "start" and "end," to denote a specific memory range. 
- * When a range of memory is mapped from the system, it is recorded in red-black trees based on the type and characteristics of that memory range.
+ * This red-black tree implementation is optimized for minimal memory usage.
  *
- * Box64 utilizes four red-black trees, each serving distinct purposes:
- * 1. memprot: Manages memory protection settings where each node's data field represents the permissions of the memory range. 
- *    The "rb_set" function within this tree can set or change permissions for a specified range.
- * 2. mapallmem: Tracks all memory mappings. Its nodes' data field can indicate whether the memory is included in this mapping.
- * 3. mmapmem: Similar to "mapallmem" but specifically for memory mapped through the mmap system call. 
- *    The nodes' data fields here differentiate whether the memory is exclusively mapped by mmap.
- * 4. blockstree: Specifically contains memory ranges for blocks, where each node represents a different block. 
- *    The "data" field in this tree represents the index of the block in the "blocklist_s" array "p_blocks".
+ * A red-black tree is a self-balancing binary search tree that functions as
+ * a dynamic ordered dictionary, as long as the elements can be arranged in a
+ * strict weak order.
  *
- * Currently, there is an overlap between "mapallmem" and "mmapmem", where if memory is mapped in "mmapmem", it is also considered mapped in "mapallmem". 
- * If "mapallmem" and "mmapmem" were to be merged in the future, the "data" field could then take values indicating:
- * - 0: Memory is not mapped.
- * - 1: Memory is only mapped in "mapallmem".
- * - 2: Memory is mapped in both "mapallmem" and "mmapmem".
- * 
- * Before the introduction of the red-black tree in Box64, the rationale for memory management was a sparse array, which takes O(n) complexity for accessing data.
- * After transitioning from a sparse array to a red-black tree, the memory usage has decreased slightly for processes that consumed a lot of RAM (for example, Steam uses about 100 MB less memory, and each Wine process uses about 15 MB less).
+ * The data structure is intrusive, meaning that the node handle is designed
+ * to be embedded within a user-defined struct, similar to the doubly-linked
+ * list implementation in the Linux kernel. No additional data pointer is stored
+ * in the node itself.
+ * Reference:
+ * https://www.kernel.org/doc/html/latest/core-api/kernel-api.html#list-management-functions
+ *
+ * The color bit is combined with one of the child pointers, reducing memory
+ * overhead. Importantly, this implementation does not store a 'parent' pointer.
+ * Instead, the tree's upper structure is managed dynamically using a stack
+ * during traversal. As a result, each node requires only two pointers, making
+ * the memory overhead comparable to that of a doubly-linked list.
  */
 
-#ifndef RBTREE_H
-#define RBTREE_H
+#ifndef _RBTREE_H_
+#define _RBTREE_H_
 
+#include <stdbool.h>
 #include <stdint.h>
 
-typedef struct rbtree rbtree_t;
-
-/** 
- * rbtree_init() - Initializes a new red-black tree.
- * @name: The name of the red-black tree. If null, the default name "(rbtree)" is assigned.
+/* Although the use of alloca(3) is generally discouraged due to the lack of
+ * guarantees that it returns a valid and usable memory block, it does provide
+ * temporary space that is automatically freed upon function return. This
+ * behavior makes alloca(3) faster than malloc(3) because of its simpler
+ * allocation and deallocation process. Additionally, since the compiler is
+ * aware of the allocation size, it can optimize the usage of alloca(3). For
+ * example, Clang can optimize fixed-size calls to alloca(3), making it a
+ * legitimate choice when using the GNU built-in function form.
  *
- * This function allocates memory for a new red-black tree and initializes its properties.
- * Return: A pointer to the newly created red-black tree.
+ * Reference: https://nullprogram.com/blog/2019/10/28/
  */
-rbtree_t* rbtree_init(const char* name);
+#define _RB_DISABLE_ALLOCA 0
 
-/** 
- * rbtree_delete() - Deletes an entire red-black tree.
- * @tree: Pointer to the red-black tree to delete.
+#if _RB_DISABLE_ALLOCA == 0
+#if defined(__GNUC__) || defined(__clang__)
+#define alloca __builtin_alloca
+#else
+#include <alloca.h>
+#endif
+#endif
+
+typedef enum { RB_LEFT = 0, RB_RIGHT = 1 } rb_side_t;
+
+/* red-black tree node.
  *
- * This function recursively deletes all nodes in the red-black tree starting from the root 
- * and then frees the memory of the tree structure itself via delete_rbnode().
+ * Red-black trees often use an additional "parent" pointer for upward traversal
+ * during rebalancing after modifications. However, this avoids the need for
+ * a third pointer by using a local stack of node pointers constructed during
+ * downward traversal. This stack-based approach dynamically handles
+ * modifications without explicit parent pointers, reducing memory overhead.
  */
-void rbtree_delete(rbtree_t* tree);
+typedef struct __rb_node {
+    struct __rb_node *children[2];
+} rb_node_t;
 
-/** 
- * rb_get() - Retrieves data associated with a specific address in the red-black tree.
- * @tree: Pointer to the red-black tree from which data is to be retrieved.
- * @addr: The memory address used as a key to find the corresponding node in the tree.
- *
- * This function searches the red-black tree for a node that corresponds to the specified address.
- * Return: The data associated with the address if found; otherwise, 0.
+/* Maximum theoretical depth of the tree, calculated based on pointer size.
+ * Assuming the memory is entirely filled with nodes containing two pointers,
+ * and considering that the tree may be twice as deep as a perfect binary tree,
+ * including the root node. For 32-bit pointers, the maximum depth is 59 nodes,
+ * while for 64-bit pointers, it is 121 nodes.
  */
-uint32_t rb_get(rbtree_t* tree, uintptr_t addr);
+#define _RB_PTR_TAG_BITS(t) ((sizeof(t)) < 8 ? 2 : 3)
+#define _RB_PTR_SIZE_BITS(t) (8 * sizeof(t))
+#define _RB_MAX_TREE_DEPTH \
+    (2 * (_RB_PTR_SIZE_BITS(int *) - _RB_PTR_TAG_BITS(int *) - 1) + 1)
 
-/** 
- * rb_get_64() - Retrieves data associated with a specific address in the red-black tree.
- * @tree: Pointer to the red-black tree from which data is to be retrieved.
- * @addr: The memory address used as a key to find the corresponding node in the tree.
+/* Red-black tree comparison predicate.
  *
- * This function searches the red-black tree for a node that corresponds to the specified address.
- * Return: The 64bits data associated with the address if found; otherwise, 0.
+ * Compares two nodes and returns true if node A is strictly less than node B,
+ * based on the tree's defined sorting criteria. Returns false otherwise.
+ *
+ * During insertion, the node being inserted is always designated as "A", while
+ * "B" refers to the existing node within the tree for comparison. This behavior
+ * can be leveraged (with caution) to implement "most/least recently added"
+ * semantics for nodes that would otherwise have equal comparison values.
  */
-uint64_t rb_get_64(rbtree_t* tree, uintptr_t addr);
+typedef bool (*rb_cmp_t)(const rb_node_t *a, const rb_node_t *b);
 
-/** 
- * rb_get_end() - Searches for a node within a specified address range in a red-black tree and retrieves its data and end address.
- * @tree: Pointer to the red-black tree to be searched.
- * @addr: The address to search for within the nodes of the red-black tree.
- * @val: Pointer to store the data of the node that contains the address if found.
- * @end: Pointer to store the end address of the node that contains the address, or the start of the next node if not found, or UINTPTR_MAX if no next node exists.
- *
- * This function traverses the red-black tree starting from the root, searching for a node where the 'addr' falls between the node's start and end addresses (exclusive of end).
- * If such a node is found, the function stores the node's data in '*val' and the node's end address in '*end', then returns 1 to indicate success.
- * If no such node is found, the function sets '*val' to 0 and '*end' to the start address of the next node in the tree structure or to UINTPTR_MAX if there is no subsequent node.
- * Return: 1 if a node containing the address is found, otherwise 0.
- */
-int rb_get_end(rbtree_t* tree, uintptr_t addr, uint32_t* val, uintptr_t* end);
+/* Red-black tree structure */
+typedef struct {
+    const char* name;
+    rb_node_t *root;   /**< Root node of the tree */
+    rb_cmp_t cmp_func; /**< Comparison function for nodes */
+    int max_depth;
+#if _RB_DISABLE_ALLOCA != 0
+    rb_node_t *iter_stack[_RB_MAX_TREE_DEPTH];
+    bool iter_left[_RB_MAX_TREE_DEPTH];
+#endif
+} rb_t;
 
-/** 
- * rb_get_end_64() - Searches for a node within a specified address range in a red-black tree and retrieves its data and end address.
- * @tree: Pointer to the red-black tree to be searched.
- * @addr: The address to search for within the nodes of the red-black tree.
- * @val: Pointer to store the data of the node that contains the address if found.
- * @end: Pointer to store the end address of the node that contains the address, or the start of the next node if not found, or UINTPTR_MAX if no next node exists.
- *
- * This function traverses the red-black tree starting from the root, searching for a node where the 'addr' falls between the node's start and end addresses (exclusive of end).
- * If such a node is found, the function stores the node's data in '*val' and the node's end address in '*end', then returns 1 to indicate success.
- * If no such node is found, the function sets '*val' to 0 and '*end' to the start address of the next node in the tree structure or to UINTPTR_MAX if there is no subsequent node.
- * Return: 1 if a node containing the address is found, otherwise 0.
- */
-int rb_get_end_64(rbtree_t* tree, uintptr_t addr, uint64_t* val, uintptr_t* end);
+/* forward declaration for helper functions, used for inlining */
+rb_node_t *__rb_child(rb_node_t *node, rb_side_t side);
+int __rb_is_black(rb_node_t *node);
+rb_node_t *__rb_get_minmax(rb_t *tree, rb_side_t side);
 
-/**
- * rb_set() - Set an address range in a red-black tree.
- * @tree: Pointer to the red-black tree where the address range will be set.
- * @start: The starting address of the range to be set.
- * @end: The ending address of the range to be set.
- * @data: The data value to associate with the address range.
- *
- * This function adds a new address range with associated data to the red-black tree. 
- * However, it is not always necessary to create a new node for each new address.
- * If the range is adjacent to the existing nodes with the same data, the existing nodes will be extended to contain the new address.
- *       +---------+---------+---------+ +---------+---------+
- *       |            data A           | |       data A      |
- *       +---------+---------+---------+ +---------+---------+
- * 
- *                                ||
- *                               \||/ 
- *                                \/
- * 
- *       +---------+---------+---------+---------+---------+
- *       |                      data A                     |
- *       +---------+---------+---------+---------+---------+
- * 
- * If the range overlaps with existing nodes, it will merge or modify nodes to maintain non-overlapping, contiguous ranges.
- * This includes extending, splitting, or merging nodes based on the overlap conditions and data consistency. 
- * It handles multiple edge cases:
- * 1. Overlap with same data: The existing node will be extended.
- * 
- * (Case 1: Partial Overlap)
- *       +---------+---------+---------+---------+---------+
- *       |                      data A                     |
- *       +---------+---------+---------+---------+---------+
- *                           ^.....      overlap      .....^
- *                           +---------+---------+---------+---------+---------+
- *                           |                      data A                     |
- *                           +---------+---------+---------+---------+---------+
- * 
- *                                ||
- *                               \||/ Extend A
- *                                \/
- *   
- *       +---------+---------+---------+---------+---------+---------+---------+
- *       |                                data A                               |
- *       +---------+---------+---------+---------+---------+---------+---------+
- * 
- * (Case 2: Overlap on Both Ends)
- *       +---------+---------+---------+---------+---------+
- *       |                     data A                      |
- *       +---------+---------+---------+---------+---------+
- *                 ^.....      overlap      .....^
- *                 +---------+---------+---------+
- *                 |           data A            |
- *                 +---------+---------+---------+
- * 
- *                                ||
- *                               \||/ Do nothing
- *                                \/
- *   
- *       +---------+---------+---------+---------+---------+
- *       |                     data A                      |
- *       +---------+---------+---------+---------+---------+
- * 
- * 
- * 2. Overlap with different data: The overlapped part will be overwritten with the data from the new address range.
- *    The following graph shows that memory B is going to be added to the red-black tree where memory B overlaps with the existing node memory A.
- * 
- * (Case 1: Overlap on Both Ends)
- *       +---------+---------+---------+---------+---------+
- *       |                     data A                      |
- *       +---------+---------+---------+---------+---------+
- *                 ^.....      overlap      .....^
- *                 +---------+---------+---------+
- *                 |           data B            |
- *                 +---------+---------+---------+
- * 
- *                                ||
- *                               \||/ Split the existing node into three new nodes
- *                                \/
- *   
- *       +---------+ +---------+---------+---------+ +---------+
- *       |  data A | |            data B           | |  data A |
- *       +---------+ +---------+---------+---------+ +---------+
- * 
- * (Case 2: Partial Overlap)
- *       +---------+---------+---------+---------+---------+
- *       |                      data A                     |
- *       +---------+---------+---------+---------+---------+
- *                           ^.....      overlap      .....^
- *                           +---------+---------+---------+---------+---------+
- *                           |                      data B                     |
- *                           +---------+---------+---------+---------+---------+
- * 
- *                                ||
- *                               \||/ Adjust A by changing the pointers to exclude the segments that overlap with B
- *                                \/
- *   
- *       +---------+---------+ +---------+---------+---------+---------+---------+
- *       |       data A      | |                      data B                     | 
- *       +---------+---------+ +---------+---------+---------+---------+---------+
- * 
- * (Case 3: Complete Encapsulation)
- *                 +---------+---------+---------+
- *                 |            data A           |
- *                 +---------+---------+---------+
- *                                
- *                                ||
- *                               \||/ Remove A entirely
- *                                \/
- *       +---------+---------+---------+---------+---------+
- *       |                      data B                     |
- *       +---------+---------+---------+---------+---------+
- *                                         
- * The function ensures the tree remains balanced and correctly represents the address space with minimal nodes.
- *
- * Return: 0 on success, or -1 on failure. 
- */
-int rb_set(rbtree_t* tree, uintptr_t start, uintptr_t end, uint32_t data);
-
-
-/**
- * rb_set_64() - Set an address range in a red-black tree.
- * @tree: Pointer to the red-black tree where the address range will be set.
- * @start: The starting address of the range to be set.
- * @end: The ending address of the range to be set.
- * @data: The data value to associate with the address range.
- *
- * This function adds a new address range with associated data to the red-black tree. 
- */
-
-int rb_set_64(rbtree_t* tree, uintptr_t start, uintptr_t end, uint64_t data);
-
-/**
- * rb_unset() - Removes a range of values from the red-black tree.
+/* Insert a new node into the red-black tree.
  * @tree: Pointer to the red-black tree.
- * @start: The start address of the range to remove.
- * @end: The end address of the range to remove.
+ * @node: Pointer to the node to be inserted.
  *
- * This function removes or adjusts nodes in the red-black tree that overlap with the specified
- * range [start, end). It traverses the tree to find overlapping nodes, removes entire nodes
- * that are completely within the range, and modifies nodes that partially overlap by adjusting
- * their start or end values accordingly.
- *
- * Return: 0 on success.
+ * This function initializes the new node, finds its insertion point,
+ * and adjusts the tree to maintain red-black properties. It handles
+ * the root case, allocates the traversal stack, performs the insertion,
+ * and fixes any violations caused by the insertion.
  */
-int rb_unset(rbtree_t* tree, uintptr_t start, uintptr_t end);
+void rb_insert(rb_t *tree, rb_node_t *node);
 
-/**
- * rb_get_righter() - Retrieves the start value of the right-most node in a red-black tree.
- * @tree: Pointer to the red-black tree whose right-most node's start value is to be retrieved.
+/* Remove a node from the red-black tree.
+ * @tree: Pointer to the red-black tree.
+ * @node: Pointer to the node to be removed.
  *
- * This function traverses the red-black tree from the root to the right-most node, which is the node
- * with the highest key value in the tree. 
- * Return: The start value of the right-most node if the tree is not empty; otherwise, 0.
+ * This function handles the removal of a node from the red-black tree,
+ * rebalancing the tree as necessary to maintain red-black properties.
  */
-uintptr_t rb_get_righter(rbtree_t* tree);
+void rb_remove(rb_t *tree, rb_node_t *node);
 
-#endif // RBTREE_H
+/* Return the lowest-sorted member of the red-black tree */
+static inline rb_node_t *rb_get_min(rb_t *tree)
+{
+    return __rb_get_minmax(tree, RB_LEFT);
+}
+
+/* Return the highest-sorted member of the red-black tree */
+static inline rb_node_t *rb_get_max(rb_t *tree)
+{
+    return __rb_get_minmax(tree, RB_RIGHT);
+}
+
+/* Check if the given node is present in the red-black tree.
+ * @tree: Pointer to the red-black tree.
+ * @node: Pointer to the node to search for.
+ *
+ * This function searches the tree to determine if the specified node is
+ * present. It starts from the root and traverses the tree based on the
+ * comparison function until it finds the node or reaches a leaf. The function
+ * does not internally dereference the node pointer (though the tree's
+ * 'cmp_func' callback might); it only tests for pointer equality with nodes
+ * already in the tree. As a result, this function can be used to implement a
+ * "set" construct by comparing pointers directly.
+ */
+bool rb_contains(rb_t *tree, rb_node_t *node);
+
+/* Helper structure for non-recursive red-black tree traversal.
+ *
+ * This structure is used by the RB_FOREACH and RB_FOREACH_CONTAINER macros
+ * to perform an in-order traversal of a red-black tree without recursion. It
+ * maintains a dynamic stack of nodes and a corresponding array to indicate
+ * whether each node is a left child of its parent.
+ */
+typedef struct {
+    rb_node_t **stack; /**< Hold the nodes encountered during traversal */
+    bool *is_left;     /**< Track the relationship of each node to its parent */
+    int32_t top;       /**< Keeps track of the current position in the stack */
+} rb_foreach_t;
+
+#if _RB_DISABLE_ALLOCA == 0
+#define _RB_FOREACH_INIT(tree, node)                              \
+    {                                                             \
+        .stack = alloca((tree)->max_depth * sizeof(rb_node_t *)), \
+        .is_left = alloca((tree)->max_depth * sizeof(bool)),      \
+        .top = -1,                                                \
+    }
+#else
+#define _RB_FOREACH_INIT(tree, node)      \
+    {                                     \
+        .stack = &(tree)->iter_stack[0],  \
+        .is_left = &(tree)->iter_left[0], \
+        .top = -1,                        \
+    }
+#endif
+
+rb_node_t *__rb_foreach_next(rb_t *tree, rb_foreach_t *f);
+
+/* In-order traversal of a red-black tree without recursion.
+ * @tree: Pointer to the red-black tree ('rb_t') to traverse.
+ * @node: Name of a local variable of type 'rb_node_t *' to use as the iterator.
+ *
+ * This macro performs an in-order traversal of the red-black tree using a
+ * non-recursive approach. It sets up a "foreach" loop for iterating through
+ * the nodes of the tree in sorted order. The macro avoids recursion by using
+ * an internal stack for traversal, providing a balance between code size
+ * and efficiency.
+ *
+ * Notes:
+ * - This loop is not safe for concurrent modifications. Changing the tree
+ *   structure during traversal may result in undefined behavior, such as
+ *   nodes being skipped or visited multiple times.
+ * - The macro expands its arguments multiple times. Avoid using expressions
+ *   with side effects (e.g., function calls) as arguments.
+ */
+#define RB_FOREACH(tree, node)                            \
+    for (rb_foreach_t __f = _RB_FOREACH_INIT(tree, node); \
+         ((node) = __rb_foreach_next((tree), &__f));      \
+         /**/)
+
+#ifndef container_of
+/* Compute the address of the object containing a given member.
+ * @ptr:    Pointer to the member variable.
+ * @type:   Type of the structure that includes the member.
+ * @member: Name of the member variable in the structure @type.
+ * Return a pointer to the enclosing object of type @type.
+ */
+#define container_of(ptr, type, member)                              \
+    __extension__({                                                  \
+        const __typeof__(((type *) 0)->member) *(__pmember) = (ptr); \
+        (type *) ((char *) __pmember - offsetof(type, member));      \
+    })
+#endif
+
+/* In-order traversal of a red-black tree with container handling.
+ * @tree:  Pointer to the red-black tree ('rb_t') to traverse.
+ * @node:  Name of the local iterator variable, which is a pointer to the
+ *         container type.
+ * @field: Name of the 'rb_node_t' member within the container struct.
+ *
+ * This macro performs an in-order traversal of a red-black tree, similar to
+ * RB_FOREACH. However, instead of iterating over raw 'rb_node_t' nodes, it
+ * iterates over user-defined container structs that embed an 'rb_node_t'
+ * member. The macro automatically resolves the container type using the
+ * 'container_of' macro.
+ */
+#define RB_FOREACH_CONTAINER(tree, node, field)                               \
+    for (rb_foreach_t __f = _RB_FOREACH_INIT(tree, node); ({                  \
+             rb_node_t *n = __rb_foreach_next(tree, &__f);                    \
+             (node) = n ? container_of(n, __typeof__(*(node)), field) : NULL; \
+             (node);                                                          \
+         });                                                                  \
+         /**/)
+
+#endif /* _RBTREE_H_ */

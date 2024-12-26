@@ -314,62 +314,62 @@ dynarec_log(LOG_DEBUG, "set %s: 0x%lx, 0x%lx, 0x%x\n", tree->name, start, end, d
     return add_range(tree, start, end, data);
 }
 
-int rb_unset(rbtree_t *tree, uintptr_t start, uintptr_t end) {
+int rb_unset(rb_t *tree, uintptr_t start, uintptr_t end) {
 // printf("rb_unset( "); rbtree_print(tree); printf(" , 0x%lx, 0x%lx);\n", start, end); fflush(stdout);
 dynarec_log(LOG_DEBUG, "unset: %s 0x%lx, 0x%lx);\n", tree->name, start, end);
     if (!tree->root) return 0;
 
-    rbnode *node = tree->root, *prev = NULL, *next = NULL;
+    rb_node_t *node = tree->root, *prev = NULL, *next = NULL;
     while (node) {
-        if (node->start < start) {
+        if (get_start(node) < start) {//if  node->start < start
             prev = node;
-            node = node->right;
-        } else if (node->start == start) {
-            if (node->left) {
-                prev = node->left;
-                while (prev->right) prev = prev->right;
+            node = get_child(node, RB_RIGHT); //node->right
+        } else if (get_start(node) == start) { // if node->start == start
+            if (node->children[RB_LEFT]) {// if node->left
+                prev = rb_get_local_min(node->children[RB_LEFT]);//get the local min of the left subtree
             }
-            if (node->right) {
-                next = node->right;
-                while (next->left) next = next->left;
+            if (node->children[RB_RIGHT]) {
+                next = rb_get_local_max(node->children[RB_RIGHT]);//get the local max of the right subtree
             }
             break;
         } else {
             next = node;
-            node = node->left;
+            node = get_child(node, RB_LEFT);//node->left
         }
     }
 
     if (node) {
-        if (node->end > end) {
-            node->start = end;
+        if (get_end(node) > end) {
+            update_start(node, end);//node->start = end
             return 0;
-        } else if (node->end == end) {
+        } else if (get_end(node)== end) {
             remove_node(tree, node);
             return 0;
         } else {
             remove_node(tree, node);
         }
-    } else if (prev && (prev->end > start)) {
-        if (prev->end > end) {
+    } else if (prev && (get_end(prev)> start)) {
+        if (get_end(prev) > end) {
             // Split prev
-            int ret = add_range_next_to(tree, prev->right ? next : prev, end, prev->end, prev->data);
-            prev->end = start;
+            int ret = add_range(tree, end, get_end(prev), get_data(prev));
+            //prev->end = start;
             return ret;
-        } else if (prev->end == end) {
-            prev->end = start;
+        } else if (get_end(prev)== end) {
+            //prev->end = start;
+            update_end(prev, start);
             return 0;
         } // else fallthrough
     }
-    while (next && (next->start < end) && (next->end <= end)) {
+    while (next && (get_start(next)< end) && (get_end(next) <= end)) {
         // Remove the entire node
         node = next;
         next = succ_node(next);
         remove_node(tree, node);
     }
-    if (next && (next->start < end)) {
+    if (next && (get_start(next) < end)) {
         // next->end > end: cut the node
-        next->start = end;
+        //next->start = end;
+        update_start(next, end);
     }
     return 0;
 }

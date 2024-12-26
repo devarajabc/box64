@@ -20,7 +20,9 @@
 #define rbtreeFree customFree
 #endif
 #endif
-
+/*Compares two nodes and returns true if node A is strictly less than node B,
+ * based on the tree's defined sorting criteria. Returns false otherwise.
+ */
 bool compare (const rb_node_t *a, const rb_node_t *b)
 {
     return get_start(a) < get_start(b) ? true : false;   
@@ -29,7 +31,7 @@ bool compare (const rb_node_t *a, const rb_node_t *b)
 rb_t* rbtree_init(const char* name) {
     rb_t* tree = rbtreeMalloc(sizeof(rb_t));
     tree->root = NULL;
-    tree->cmp_func = 
+    tree->cmp_func = &compare;
     tree->name = name?name:"(rbtree)";
     return tree;
 }
@@ -85,6 +87,24 @@ static inline rb_node_t *rb_get_local_max(rb_node_t *n)
     return __rb_get_local_minmax(n, RB_RIGHT);
 }
 
+void update_end(rb_node_t *n, uintptr_t new_end)
+{
+    rbnode *Node = container_of(n, rbnode, node);
+    Node->end = new_end;
+}
+
+void update_start(rb_node_t *n, uintptr_t new_start)
+{
+    rbnode *Node = container_of(n, rbnode, node);
+    Node->start = new_start;
+}
+
+void update_data(rb_node_t *n, uint32_t new_data)
+{
+    rbnode *Node = container_of(n, rbnode, node);
+    Node->data = new_data;
+}
+
 static rb_node_t *pred_node(rb_node_t *node) {
     if (!node) return NULL;
     if (node->children[RB_LEFT]) {//node->left
@@ -119,32 +139,6 @@ static rb_node_t *find_addr(rb_t *tree, uintptr_t addr) {
         else node = get_child(node, RB_RIGHT);
     }
     return NULL;
-}
-
-void adjacent_node(uintptr_t start, rb_node_t **node, rb_node_t **prev, rb_node_t **last){
-    //rb_node_t *node = tree->root, *prev = NULL, *last = NULL;
-    // Handle the "start" address => get three node : prev, node and last
-    // prev is the largest node starting strictly before start, or NULL if there is none
-    // node is the node starting exactly at start, or NULL if there is none
-    // last is the smallest node starting strictly after start, or NULL if there is none
-    // Note that prev may contain start
-    while (node) {
-        if (get_start(node) < start) {//if  node->start < start
-            prev = node;
-            node = get_child(node, RB_RIGHT); //node->right
-        } else if (get_start(node) == start) { // if node->start == start
-            if (node->children[RB_LEFT]) {// if node->left
-                prev = rb_get_local_min(node->children[RB_LEFT]);//get the local min of the left subtree
-            }
-            if (node->children[RB_RIGHT]) {
-                last = rb_get_local_max(node->children[RB_RIGHT]);//get the local max of the right subtree
-            }
-            break;
-        } else {
-            last = node;
-            node = get_child(node, RB_LEFT);//node->left
-        }
-    }
 }
 
 uintptr_t rb_get_righter(rb_t* tree){
@@ -187,41 +181,60 @@ dynarec_log(LOG_DEBUG, "set %s: 0x%lx, 0x%lx, 0x%x\n", tree->name, start, end, d
     }
     
     rb_node_t *node = tree->root, *prev = NULL, *last = NULL;
-    adjacent_node(start, &node, &prev, &last);
+     while (node) {
+        if (get_start(node) < start) {//if  node->start < start
+            prev = node;
+            node = get_child(node, RB_RIGHT); //node->right
+        } else if (get_start(node) == start) { // if node->start == start
+            if (node->children[RB_LEFT]) {// if node->left
+                prev = rb_get_local_min(node->children[RB_LEFT]);//get the local min of the left subtree
+            }
+            if (node->children[RB_RIGHT]) {
+                last = rb_get_local_max(node->children[RB_RIGHT]);//get the local max of the right subtree
+            }
+            break;
+        } else {
+            last = node;
+            node = get_child(node, RB_LEFT);//node->left
+        }
+    }
+    //rb_node_t *node = tree->root, *prev = NULL, *last = NULL;
+    // Handle the "start" address => get three node : prev, node and last
+    // prev is the largest node starting strictly before start, or NULL if there is none
+    // node is the node starting exactly at start, or NULL if there is none
+    // last is the smallest node starting strictly after start, or NULL if there is none
+    // Note that prev may contain start
     if (prev && (get_end(prev) >= start) && (get_data(prev) == data)) {  
         if (end <= get_end(prev)) return 0; // Nothing to do!
         if (node && (get_end(node) > end)) {
-            node->start = end;
-            prev->end = end; 
+            update_start(node, end); //node->start = end
+            update_end(prev, end); //prev->end = end
             return 0;
-        } else if (node && (node->end == end)) {
+        } else if (node && (get_end(node) == end)) {
             remove_node(tree, node);
-            prev->end = end;
+            update_end(prev, end);//prev->end = end;
             return 0;
         } else if (node) { 
-            remove_node(tree, node); //Included -> remove
+            remove_node(tree, node); 
         }
-        //
-        // |--A--| |--B--| |--C--|
-        // |--------new----------|
-        //
-        while (last && (last->start < end) && (last->end <= end)) {
+        while (last && (get_start(last)< end) && (get_end(last) <= end)) {//last && (last->start < end) && (last->end <= end)
             // Remove the entire node
             node = last;
             last = succ_node(last);
             remove_node(tree, node);
         }
-        if (last && (last->start <= end) && (last->data == data)) {
+        if (last && (get_start(last) <= end) && (get_data(last) == data)) {
             // Merge node and last
-            prev->end = last->end;
+            //prev->end = last->end;
+            update_end(prev, get_end(last));
             remove_node(tree, last);
             return 0;
         }
-        if (last && (last->start < end)) last->start = end;
-        prev->end = end;
+        if (last && (get_start(last) < end)) update_start(last, end);//last->start = end;
+        //prev->end = end;
+        update_end(prev, end);
         return 0;
-        // "prev" and "new" share same data -> append "prev" 
-    } else if (prev && (prev->end > start)) {//case 2
+    } else if (prev && (prev->end > start)) {
         if (prev->end > end) {
             // Split in three
             // Note that here, succ(prev) = last and node = NULL

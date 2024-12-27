@@ -172,7 +172,7 @@ int rb_get_end(rb_t* tree, uintptr_t addr, uint32_t* val, uintptr_t* end) {
     return 0;
 }
 
-int rb_get_end_64(rbtree_t* tree, uintptr_t addr, uint32_t* val, uintptr_t* end){
+int rb_get_end_64(rb_t* tree, uintptr_t addr, uint32_t* val, uintptr_t* end){
     return rb_get_end(tree, addr, val, end);
 }
 
@@ -352,7 +352,7 @@ dynarec_log(LOG_DEBUG, "set %s: 0x%lx, 0x%lx, 0x%x\n", tree->name, start, end, d
     // Probably 'last->left ? prev : last' is enough
     return add_range(tree, start, end, data);
 }
-int rb_set_64(rbtree_t *tree, uintptr_t start, uintptr_t end, uint32_t data){
+int rb_set_64(rb_t *tree, uintptr_t start, uintptr_t end, uint32_t data){
     return rb_set(tree, start, end, data);
 }
 

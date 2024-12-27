@@ -62,7 +62,7 @@ void rbtree_delete(rb_t* tree);
  * Return: The data associated with the address if found; otherwise, 0.
  */
 uint32_t rb_get(rb_t* tree, uintptr_t addr);
-
+uint32_t rb_get_64(rb_t* tree, uintptr_t addr);
 /** 
  * rb_get_end() - Searches for a node within a specified address range in a red-black tree and retrieves its data and end address.
  * @tree: Pointer to the red-black tree to be searched.
@@ -76,7 +76,7 @@ uint32_t rb_get(rb_t* tree, uintptr_t addr);
  * Return: 1 if a node containing the address is found, otherwise 0.
  */
 int rb_get_end(rb_t* tree, uintptr_t addr, uint32_t* val, uintptr_t* end);
-
+int rb_get_end_64(rb_t* tree, uintptr_t addr, uint32_t* val, uintptr_t* end);
 /**
  * rb_set() - Set an address range in a red-black tree.
  * @tree: Pointer to the red-black tree where the address range will be set.
@@ -193,7 +193,7 @@ int rb_get_end(rb_t* tree, uintptr_t addr, uint32_t* val, uintptr_t* end);
  * Return: 0 on success, or -1 on failure. 
  */
 int rb_set(rb_t * tree, uintptr_t start, uintptr_t end, uint32_t data);
-
+int rb_set_64(rb_t * tree, uintptr_t start, uintptr_t end, uint32_t data);
 /**
  * rb_unset() - Removes a range of values from the red-black tree.
  * @tree: Pointer to the red-black tree.
@@ -218,5 +218,4 @@ int rb_unset(rb_t * tree, uintptr_t start, uintptr_t end);
  * Return: The start value of the right-most node if the tree is not empty; otherwise, 0.
  */
 uintptr_t rb_get_righter(rb_t * tree);
-
-#endif // RBTREE_H
+#endif // RBTREE_HELPER_H

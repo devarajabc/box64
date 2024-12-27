@@ -27,6 +27,7 @@
 #include "khash.h"
 #include "threads.h"
 #include "rbtree_helper.h"
+typedef rb_t rbtree_t;
 #ifdef DYNAREC
 #include "dynablock.h"
 #include "dynarec/dynablock_private.h"

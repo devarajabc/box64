@@ -22,8 +22,8 @@
  * After transitioning from a sparse array to a red-black tree, the memory usage has decreased slightly for processes that consumed a lot of RAM (for example, Steam uses about 100 MB less memory, and each Wine process uses about 15 MB less).
  */
 
-#ifndef RBTREE_HELPER_H
-#define RBTREE_HELPER_H
+#ifndef RBTREE_ext_H
+#define RBTREE_ext_H
 #include "rbtree.h"
 #include <stdbool.h>
 #include <stdint.h>

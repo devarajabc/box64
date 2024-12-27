@@ -10,7 +10,7 @@
 #include "custommem.h"
 #include "debug.h"
 #include "rbtree.h"
-#include "rbtree_helper.h"
+#include "rbtree_ext.h"
 
 #if 0
 #define rbtreeMalloc box_malloc

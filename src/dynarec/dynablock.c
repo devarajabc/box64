@@ -26,7 +26,7 @@
 
 #include "custommem.h"
 #include "khash.h"
-#include "rbtree_helper.h"
+#include "rbtree_ext.h"
 
 uint32_t X31_hash_code(void* addr, int len)
 {

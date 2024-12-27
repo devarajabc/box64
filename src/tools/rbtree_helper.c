@@ -20,6 +20,7 @@
 #define rbtreeFree customFree
 #endif
 #endif
+static inline uintptr_t get_start(rb_node_t *n);
 /*Compares two nodes and returns true if node A is strictly less than node B,
  * based on the tree's defined sorting criteria. Returns false otherwise.
  */

@@ -187,14 +187,6 @@ uint32_t rb_get_64(rb_t *tree, uintptr_t addr) {//tmp
     if (node) return get_data(node);
     else return 0;
 }
-// Memory range management
-rb_t* rbtree_init(const char* name) {
-    rb_t* tree = rbtreeMalloc(sizeof(rb_t));
-    tree->root = NULL;
-    tree->cmp_func = &compare;
-    tree->name = name?name:"(rbtree)";
-    return tree;
-}
 
 static inline void delete_rbnode(rb_node_t *root) {
     if (!root) return;

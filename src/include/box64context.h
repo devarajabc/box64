@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include "pathcoll.h"
 #include "dictionnary.h"
+#include "rbtree_helper.h"
 #ifdef DYNAREC
 #include "dynarec/native_lock.h"
 #endif

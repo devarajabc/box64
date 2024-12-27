@@ -147,8 +147,47 @@ uintptr_t rb_get_righter(rb_t* tree){
     rb_node_t* node = rb_get_max(tree);
     return get_start(node);
 }
-// Memory range management
 
+int rb_get_end(rb_t* tree, uintptr_t addr, uint32_t* val, uintptr_t* end) {
+    rb_node_t *node = tree->root, *next = NULL;
+    while (node) {
+        if ((get_start(node) <= addr) && (get_end(node) > addr)) {
+             *val = get_data(node);//node->data
+            *end = get_end(node);//node->end
+            return 1;
+        }
+        if (get_end(node)  <= addr) {
+            node = get_child(node, RB_RIGHT);
+        } else {
+            next = node;
+            node = get_child(node, RB_LEFT);
+        }
+    }
+    *val = 0;
+    if (next) {
+        *end = get_start(node);
+    } else {
+        *end = (uintptr_t)-1;
+    }
+    return 0;
+}
+
+int rb_get_end_64(rbtree_t* tree, uintptr_t addr, uint32_t* val, uintptr_t* end){
+    return rb_get_end(tree, addr, val, end);
+}
+
+uint32_t rb_get(rb_t *tree, uintptr_t addr) {
+    rb_node_t *node = find_addr(tree, addr);
+    if (node) return get_data(node);
+    else return 0;
+}
+
+uint32_t rb_get_64(rb_t *tree, uintptr_t addr) {//tmp
+    rb_node_t *node = find_addr(tree, addr);
+    if (node) return get_data(node);
+    else return 0;
+}
+// Memory range management
 rb_t* rbtree_init(const char* name) {
     rb_t* tree = rbtreeMalloc(sizeof(rb_t));
     tree->root = NULL;
@@ -313,6 +352,9 @@ dynarec_log(LOG_DEBUG, "set %s: 0x%lx, 0x%lx, 0x%x\n", tree->name, start, end, d
     // Probably 'last->left ? prev : last' is enough
     return add_range(tree, start, end, data);
 }
+int rb_set_64(rbtree_t *tree, uintptr_t start, uintptr_t end, uint32_t data){
+    return rb_set(tree, start, end, data);
+}
 
 int rb_unset(rb_t *tree, uintptr_t start, uintptr_t end) {
 // printf("rb_unset( "); rbtree_print(tree); printf(" , 0x%lx, 0x%lx);\n", start, end); fflush(stdout);
@@ -373,6 +415,5 @@ dynarec_log(LOG_DEBUG, "unset: %s 0x%lx, 0x%lx);\n", tree->name, start, end);
     }
     return 0;
 }
-
 
 

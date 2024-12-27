@@ -105,30 +105,30 @@ void update_data(rb_node_t *n, uint32_t new_data)
     Node->data = new_data;
 }
 
-static rb_node_t *pred_node(rb_node_t *node) {
+static rb_node_t *pred_node(rb_t* tree, rb_node_t *node) {
     if (!node) return NULL;
-    if (node->children[RB_LEFT]) {//node->left
-        //node = node->left;
-        node = get_child(node, RB_LEFT);
-        return rb_get_local_max(node);
+    rb_node_t* tmp;
+    rb_node_t* prev;
+    RB_FOREACH(tree, tmp){
+        if(tmp == node && prev){
+            return prev;
+        }
+        prev = tmp;
     }
-    // else {
-    //    while (node->parent && node->meta & IS_LEFT) node = node->parent;
-    //    return node->parent;
-    //}
 }
 
-static rb_node_t *succ_node(rb_node_t *node) {
+static rb_node_t *succ_node(rb_t* tree, rb_node_t *node) {
     if (!node) return NULL;
-    if (node->children[RB_RIGHT]) {//node->right
-        //node = node->right;
-        node = get_child(node, RB_RIGHT);
-        return rb_get_local_min(node);
-    } 
-    //else {
-    // while (node->parent && !(node->meta & IS_LEFT)) node = node->parent;
-    //return node->parent;
-    //}
+    rb_node_t *tmp;
+    int flag = 0;
+    RB_FOREACH(tree, tmp){
+        if(flag = 1){
+            return tmp;// tmp is the succ_node
+        }
+        if(tmp == node){
+            flag = 1;
+        }
+    }
 }
 
 static rb_node_t *find_addr(rb_t *tree, uintptr_t addr) {
@@ -267,7 +267,7 @@ dynarec_log(LOG_DEBUG, "set %s: 0x%lx, 0x%lx, 0x%x\n", tree->name, start, end, d
         while (last && (get_start(last)< end) && (get_end(last) <= end)) {//last && (last->start < end) && (last->end <= end)
             // Remove the entire node
             node = last;
-            last = succ_node(last);
+            last = succ_node(tree, last);
             remove_node(tree, node);
         }
         if (last && (get_start(last) <= end) && (get_data(last) == data)) {
@@ -314,7 +314,7 @@ dynarec_log(LOG_DEBUG, "set %s: 0x%lx, 0x%lx, 0x%x\n", tree->name, start, end, d
         while (last && (get_start(last) < end) && (get_end(last) <= end)) {
             // Remove the entire node
             prev = last;
-            last = succ_node(last);
+            last = succ_node(tree, last);
             remove_node(tree, prev);
         }
         if (last && (get_start(last) <= end) && (get_data(last) == data)) {
@@ -333,7 +333,7 @@ dynarec_log(LOG_DEBUG, "set %s: 0x%lx, 0x%lx, 0x%x\n", tree->name, start, end, d
     while (last && (get_start(last) < end) && (get_end(last) <= end)) {
             // Remove the entire node
             prev = last;
-            last = succ_node(last);
+            last = succ_node(tree, last);
             remove_node(tree, prev);
     }
     if (!last) {
@@ -405,7 +405,7 @@ dynarec_log(LOG_DEBUG, "unset: %s 0x%lx, 0x%lx);\n", tree->name, start, end);
     while (next && (get_start(next)< end) && (get_end(next) <= end)) {
         // Remove the entire node
         node = next;
-        next = succ_node(next);
+        next = succ_node(tree, next);
         remove_node(tree, node);
     }
     if (next && (get_start(next) < end)) {

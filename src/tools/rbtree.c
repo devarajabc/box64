@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include "Record.h"
 
 #ifdef RBTREE_TEST
 #define rbtreeMalloc malloc
@@ -19,6 +20,9 @@
 #endif
 #endif
 
+bool queue_init_yet = false;
+queue_t Q;
+
 static void rbtree_print(const rbtree_t* tree);
 
 typedef struct rbnode {
@@ -35,10 +39,19 @@ struct rbtree {
 };
 
 rbtree_t* rbtree_init(const char* name) {
+    if(!queue_init) {
+        queue_init(&Q, sizeof(record_item)*9000);
+        queue_init_yet = true;
+    }
     rbtree_t* tree = rbtreeMalloc(sizeof(rbtree_t));
     tree->root = NULL;
     tree->is_unstable = false;
     tree->name = name?name:"(rbtree)";
+    record_item tmp;
+    tmp.op_time = get_time();
+    tmp.op_name = "Add tree";
+    tmp.Memory_usage = sizeof(rbtree_t);
+    queue_put(&Q,&tmp,sizeof(record_item));
     return tree;
 }
 
@@ -47,11 +60,21 @@ static inline void delete_rbnode(rbnode *root) {
     delete_rbnode(root->left);
     delete_rbnode(root->right);
     rbtreeFree(root);
+    record_item tmp;
+    tmp.op_time = get_time();
+    tmp.op_name = "Delete node";
+    tmp.Memory_usage = sizeof(rbnode);
+    queue_put(&Q,&tmp,sizeof(record_item));
 }
 
 void rbtree_delete(rbtree_t *tree) {
     delete_rbnode(tree->root);
     rbtreeFree(tree);
+    record_item tmp;
+    tmp.op_time = get_time();
+    tmp.op_name = "Delete tree";
+    tmp.Memory_usage = sizeof(rbtree_t);
+    queue_put(&Q,&tmp,sizeof(record_item));
 }
 
 #define IS_LEFT  0x1
@@ -62,6 +85,11 @@ static int add_range_next_to(rbtree_t *tree, rbnode *prev, uintptr_t start, uint
 // printf("Adding %lx-%lx:%hhx next to %p\n", start, end, data, prev);
     rbnode *node = rbtreeMalloc(sizeof(*node));
     if (!node) return -1;
+    record_item tmp;
+    tmp.op_time = get_time();
+    tmp.op_name = "Add node";
+    tmp.Memory_usage = sizeof(rbnode);
+    queue_put(&Q,&tmp,sizeof(record_item));
     node->start = start;
     node->end = end;
     node->data = data;

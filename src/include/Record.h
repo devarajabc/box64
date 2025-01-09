@@ -83,6 +83,9 @@ void queue_init(queue_t *q, size_t s)
 
     // Check that the requested size is a multiple of a page. If it isn't, we're
     // in trouble.
+    size_t real_mmap = s;
+    size_t buffer_algin = ((s - 1 + getpagesize()) / getpagesize()) * getpagesize();
+    s =  real_mmap > buffer_algin ? real_mmap : buffer_algin;
     if (s % getpagesize() != 0) {
         queue_error(
             "Requested size (%lu) is not a multiple of the page size (%d)", s,

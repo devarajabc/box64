@@ -337,5 +337,23 @@ void Saving(ringbuf_t *ringbuf, uint64_t *index, char *name, uint64_t Size, reco
     shared_array[*ptr].Memory_usage = Size;
     ringbuf_write_advance(ringbuf, written);
     *(index) = *(index)+1;
-    *(index) = *(index)%ARRAY_LENGTH;
+}
+
+uint64_t Reading(ringbuf_t *ringbuf, record_item *shared_array, int shm_fd, uint64_t *prev){
+    const uint64_t *ptr;
+    size_t toread;
+       if ((ptr = ringbuf_read_request(ringbuf, &toread))) {
+        if(shared_array[*ptr].op_time < *prev){
+            printf("Saving error");
+            munmap(shared_array, sizeof(record_item) * ARRAY_LENGTH);
+            close(shm_fd);
+            shm_unlink("/shm_array");
+            exit(1);
+        }
+        *prev = shared_array[*ptr].op_time;
+        printf("Action : %s, op_time : %lld, Memory_usage :%lld \n",shared_array[*ptr].op_name, shared_array[*ptr].op_time, shared_array[*ptr].Memory_usage);
+        ringbuf_read_advance(ringbuf);   
+        return 0;
+       }
+       return 1; 
 }

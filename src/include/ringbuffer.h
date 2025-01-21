@@ -57,4 +57,5 @@ static inline void ringbuf_write_advance(ringbuf_t *ringbuf, size_t written);
 static inline const void *ringbuf_read_request(ringbuf_t *ringbuf, size_t *toread);
 static inline void ringbuf_read_advance(ringbuf_t *ringbuf);
 void Saving(ringbuf_t *ringbuf, uint64_t *index, char *name, uint64_t Size, record_item *shared_array);
+uint64_t Reading(ringbuf_t *ringbuf, record_item *shared_array, int shm_fd, uint64_t *prev);
 # endif

@@ -273,7 +273,6 @@ static inline void ringbuf_read_advance(ringbuf_t *ringbuf)
 static const struct timespec req = {.tv_sec = 0, .tv_nsec = 1};
 
 #define PAD(SIZE) (((size_t)(SIZE) + 7U) & (~7U))
-#define ARRAY_LENGTH 128
 
 static int ringbuf_shm_init(ringbuf_shm_t *ringbuf_shm,
                             const char *name,

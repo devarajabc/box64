@@ -18,6 +18,7 @@ typedef struct record_item{
     const char op_name[32];
     uint64_t Memory_usage;
     uint64_t op_time;
+    bool Read;// 1 -> yes, 2-> not yet.
 }record_item;
 
 typedef struct {

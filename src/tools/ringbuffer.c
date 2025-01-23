@@ -21,7 +21,7 @@ uint64_t get_time()
     return (uint64_t)(ts.tv_sec * 1e6 + ts.tv_nsec / 1e3);
 }
 
-static inline size_t ringbuf_body_size(size_t minimum)
+inline size_t ringbuf_body_size(size_t minimum)
 {
     size_t size = 1;
     while (size < minimum)
@@ -29,7 +29,7 @@ static inline size_t ringbuf_body_size(size_t minimum)
     return size;
 }
 
-static inline void ringbuf_init(ringbuf_t *ringbuf,
+inline void ringbuf_init(ringbuf_t *ringbuf,
                                 size_t body_size,
                                 bool release_and_acquire)
 {
@@ -45,7 +45,7 @@ static inline void ringbuf_init(ringbuf_t *ringbuf,
     ringbuf->mask = ringbuf->size - 1;
 }
 
-static inline ringbuf_t *ringbuf_new(size_t minimum, bool release_and_acquire)
+inline ringbuf_t *ringbuf_new(size_t minimum, bool release_and_acquire)
 {
     ringbuf_t *ringbuf = NULL;
 
@@ -61,7 +61,7 @@ static inline ringbuf_t *ringbuf_new(size_t minimum, bool release_and_acquire)
     return ringbuf;
 }
 
-static inline void ringbuf_free(ringbuf_t *ringbuf)
+inline void ringbuf_free(ringbuf_t *ringbuf)
 {
     if (!ringbuf)
         return;
@@ -69,7 +69,7 @@ static inline void ringbuf_free(ringbuf_t *ringbuf)
     free(ringbuf);
 }
 
-static inline void _ringbuf_write_advance_raw(ringbuf_t *ringbuf,
+inline void _ringbuf_write_advance_raw(ringbuf_t *ringbuf,
                                               size_t head,
                                               size_t written)
 {
@@ -78,7 +78,7 @@ static inline void _ringbuf_write_advance_raw(ringbuf_t *ringbuf,
     atomic_store_explicit(&ringbuf->head, new_head, ringbuf->release);
 }
 
-static inline void *ringbuf_write_request_max(ringbuf_t *ringbuf,
+inline void *ringbuf_write_request_max(ringbuf_t *ringbuf,
                                               size_t minimum,
                                               size_t *maximum)
 {
@@ -155,7 +155,7 @@ static inline void *ringbuf_write_request_max(ringbuf_t *ringbuf,
     return buf + sizeof(ringbuf_element_t);
 }
 
-static inline void ringbuf_write_advance(ringbuf_t *ringbuf, size_t written)
+inline void ringbuf_write_advance(ringbuf_t *ringbuf, size_t written)
 {
     assert(ringbuf);
     /* fail miserably if someone tries to write more than rsvd */
@@ -189,7 +189,7 @@ static inline void ringbuf_write_advance(ringbuf_t *ringbuf, size_t written)
         ringbuf->gapd + sizeof(ringbuf_element_t) + RINGBUF_PAD(written));
 }
 
-static inline void _ringbuf_read_advance_raw(ringbuf_t *ringbuf,
+inline void _ringbuf_read_advance_raw(ringbuf_t *ringbuf,
                                              size_t tail,
                                              size_t read)
 {
@@ -198,7 +198,7 @@ static inline void _ringbuf_read_advance_raw(ringbuf_t *ringbuf,
     atomic_store_explicit(&ringbuf->tail, new_tail, ringbuf->release);
 }
 
-static inline const void *ringbuf_read_request(ringbuf_t *ringbuf,
+inline const void *ringbuf_read_request(ringbuf_t *ringbuf,
                                                size_t *toread)
 {
     assert(ringbuf);
@@ -254,7 +254,7 @@ static inline const void *ringbuf_read_request(ringbuf_t *ringbuf,
     return NULL;
 }
 
-static inline void ringbuf_read_advance(ringbuf_t *ringbuf)
+inline void ringbuf_read_advance(ringbuf_t *ringbuf)
 {
     assert(ringbuf);
     /* get element header from tail (for size) */
@@ -270,11 +270,11 @@ static inline void ringbuf_read_advance(ringbuf_t *ringbuf)
 
 /* Test program */
 
-static const struct timespec req = {.tv_sec = 0, .tv_nsec = 1};
+const struct timespec req = {.tv_sec = 0, .tv_nsec = 1};
 
 #define PAD(SIZE) (((size_t)(SIZE) + 7U) & (~7U))
 
-static int ringbuf_shm_init(ringbuf_shm_t *ringbuf_shm,
+int ringbuf_shm_init(ringbuf_shm_t *ringbuf_shm,
                             const char *name,
                             size_t minimum,
                             bool release_and_acquire)
@@ -315,7 +315,7 @@ static int ringbuf_shm_init(ringbuf_shm_t *ringbuf_shm,
     return 0;
 }
 
-static void ringbuf_shm_deinit(ringbuf_shm_t *ringbuf_shm)
+void ringbuf_shm_deinit(ringbuf_shm_t *ringbuf_shm)
 {
     const size_t total_size = sizeof(ringbuf_t) + ringbuf_shm->ringbuf->size;
 
@@ -329,31 +329,34 @@ void Saving(ringbuf_t *ringbuf, uint64_t *index, char *name, uint64_t Size, reco
     size_t written = PAD(sizeof(uint64_t));
     size_t maximum;
     uint64_t *ptr;
-    assert ((ptr = ringbuf_write_request_max(ringbuf, written, &maximum))); 
+    if ((ptr = ringbuf_write_request_max(ringbuf, written, &maximum))){
     *ptr = (*index)%ARRAY_LENGTH;
     //save record_item
-    shared_array[*ptr].op_name = name;
+    memcpy(shared_array[*ptr].op_name, name, strlen(name)+1);
     shared_array[*ptr].op_time = get_time();
     shared_array[*ptr].Memory_usage = Size;
     ringbuf_write_advance(ringbuf, written);
     *(index) = *(index)+1;
+    }
 }
 
-uint64_t Reading(ringbuf_t *ringbuf, record_item *shared_array, int shm_fd, uint64_t *prev){
+void Reading(ringbuf_t *ringbuf, record_item *shared_array, int shm_fd){
+    uint64_t prev = 0;
     const uint64_t *ptr;
     size_t toread;
-       if ((ptr = ringbuf_read_request(ringbuf, &toread))) {
-        if(shared_array[*ptr].op_time < *prev){
+    while (1)
+    {
+         if ((ptr = ringbuf_read_request(ringbuf, &toread))) {
+        if(shared_array[*ptr].op_time < prev){
             printf("Saving error");
             munmap(shared_array, sizeof(record_item) * ARRAY_LENGTH);
             close(shm_fd);
             shm_unlink("/shm_array");
             exit(1);
         }
-        *prev = shared_array[*ptr].op_time;
+        prev = shared_array[*ptr].op_time;
         printf("Action : %s, op_time : %lld, Memory_usage :%lld \n",shared_array[*ptr].op_name, shared_array[*ptr].op_time, shared_array[*ptr].Memory_usage);
         ringbuf_read_advance(ringbuf);   
-        return 0;
        }
-       return 1; 
+    }
 }

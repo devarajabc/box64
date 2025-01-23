@@ -43,7 +43,10 @@ struct rbtree {
 rbtree_t* rbtree_init(const char* name) {
     if(!INDEX_OF_SHARE_ARRAY) {// init shared_array and ringbuffer 
         
-        assert(ringbuf_shm_init(&ringbuf_shm, "/ringbuf_shm_test", ARRAY_LENGTH*8, true) == 0);
+        if(ringbuf_shm_init(&ringbuf_shm, "/ringbuf_shm_test", ARRAY_LENGTH*8, true) != 0){
+            perror("ringbuf_shm_open failed");
+            exit(1);
+        }
         
         shm_fd = shm_open("/shm_array", O_CREAT | O_RDWR, 0666);
         if (shm_fd == -1) {

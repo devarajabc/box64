@@ -20,11 +20,6 @@
 #endif
 #endif
 
-uint64_t INDEX_OF_SHARE_ARRAY = 0;
-int shm_fd;
-record_item *shared_array;
-ringbuf_shm_t ringbuf_shm;
-
 static void rbtree_print(const rbtree_t* tree);
 
 typedef struct rbnode {
@@ -64,6 +59,11 @@ rbtree_t* rbtree_init(const char* name) {
             shm_unlink("/shm_array");
             exit(1);
         }
+        sender_sem = sem_open("/sender_sem", O_CREAT, 0644, 1);
+        if (sender_sem == SEM_FAILED) {
+        perror("sem_open failed");
+        exit(1);
+    }
     }
     rbtree_t* tree = rbtreeMalloc(sizeof(rbtree_t));
     tree->root = NULL;

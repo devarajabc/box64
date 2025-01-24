@@ -328,9 +328,10 @@ void ringbuf_shm_deinit(ringbuf_shm_t *ringbuf_shm)
 void Saving(ringbuf_t *ringbuf, uint64_t *index, char *name, uint64_t Size, record_item *shared_array){
     size_t written = PAD(sizeof(uint64_t));
     size_t maximum;
+    sem_wait(sender_sem);
     uint64_t *ptr;
     if ((ptr = ringbuf_write_request_max(ringbuf, written, &maximum))){
-    *ptr = (*index)%ARRAY_LENGTH;
+    *ptr = (ringbuf->head/16);
     //save record_item
     memcpy(shared_array[*ptr].op_name, name, strlen(name)+1);
     shared_array[*ptr].op_time = get_time();
@@ -338,6 +339,7 @@ void Saving(ringbuf_t *ringbuf, uint64_t *index, char *name, uint64_t Size, reco
     ringbuf_write_advance(ringbuf, written);
     *(index) = *(index)+1;
     }
+    sem_post(sender_sem);
 }
 
 void Reading(ringbuf_t *ringbuf, record_item *shared_array, int shm_fd){

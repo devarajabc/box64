@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h> 
+#include <semaphore.h>
 typedef struct record_item{
     const char op_name[32];
     uint64_t Memory_usage;
@@ -40,6 +41,11 @@ struct _ringbuf_shm_t {
     int fd;
     ringbuf_t *ringbuf;
 };
+sem_t *sender_sem;
+int shm_fd;
+record_item *shared_array;
+ringbuf_shm_t ringbuf_shm;
+uint64_t INDEX_OF_SHARE_ARRAY = 0;
 
 int ringbuf_shm_init(ringbuf_shm_t *ringbuf_shm,
                             const char *name,

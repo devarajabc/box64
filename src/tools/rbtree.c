@@ -36,7 +36,7 @@ struct rbtree {
 };
 
 rbtree_t* rbtree_init(const char* name) {
-    if(!INDEX_OF_SHARE_ARRAY) {// init shared_array and ringbuffer 
+    if(!Init_le_ma) {// init shared_array and ringbuffer 
         
         if(ringbuf_shm_init(&ringbuf_shm, "/ringbuf_shm_test", ARRAY_LENGTH*8, true) != 0){
             perror("ringbuf_shm_open failed");
@@ -63,7 +63,8 @@ rbtree_t* rbtree_init(const char* name) {
         if (sender_sem == SEM_FAILED) {
         perror("sem_open failed");
         exit(1);
-    }
+        }
+        Init_le_ma = true;
     }
     rbtree_t* tree = rbtreeMalloc(sizeof(rbtree_t));
     tree->root = NULL;

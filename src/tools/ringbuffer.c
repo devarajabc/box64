@@ -325,7 +325,7 @@ void ringbuf_shm_deinit(ringbuf_shm_t *ringbuf_shm)
     free(ringbuf_shm->name);
 }
 
-void Saving(ringbuf_t *ringbuf, uint64_t *index, char *name, uint64_t Size, record_item *shared_array){
+void Saving(ringbuf_t *ringbuf, char *name, uint64_t Size, record_item *shared_array){
     size_t written = PAD(sizeof(uint64_t));
     size_t maximum;
     sem_wait(sender_sem);
@@ -337,7 +337,6 @@ void Saving(ringbuf_t *ringbuf, uint64_t *index, char *name, uint64_t Size, reco
     shared_array[*ptr].op_time = get_time();
     shared_array[*ptr].Memory_usage = Size;
     ringbuf_write_advance(ringbuf, written);
-    *(index) = *(index)+1;
     }
     sem_post(sender_sem);
 }
@@ -348,7 +347,7 @@ void Reading(ringbuf_t *ringbuf, record_item *shared_array, int shm_fd){
     size_t toread;
     while (1)
     {
-         if ((ptr = ringbuf_read_request(ringbuf, &toread))) {
+        if ((ptr = ringbuf_read_request(ringbuf, &toread))) {
         if(shared_array[*ptr].op_time < prev){
             printf("Saving error");
             munmap(shared_array, sizeof(record_item) * ARRAY_LENGTH);

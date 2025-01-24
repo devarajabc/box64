@@ -46,6 +46,7 @@ int shm_fd;
 record_item *shared_array;
 ringbuf_shm_t ringbuf_shm;
 uint64_t INDEX_OF_SHARE_ARRAY = 0;
+bool Init_le_ma = false;
 
 int ringbuf_shm_init(ringbuf_shm_t *ringbuf_shm,
                             const char *name,
@@ -62,6 +63,6 @@ inline void *ringbuf_write_request_max(ringbuf_t *ringbuf,
 inline void ringbuf_write_advance(ringbuf_t *ringbuf, size_t written);
 inline const void *ringbuf_read_request(ringbuf_t *ringbuf, size_t *toread);
 inline void ringbuf_read_advance(ringbuf_t *ringbuf);
-void Saving(ringbuf_t *ringbuf, uint64_t *index, char *name, uint64_t Size, record_item *shared_array);
+void Saving(ringbuf_t *ringbuf, char *name, uint64_t Size, record_item *shared_array);
 void Reading(ringbuf_t *ringbuf, record_item *shared_array, int shm_fd);
 # endif

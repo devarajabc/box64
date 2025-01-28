@@ -325,39 +325,62 @@ void ringbuf_shm_deinit(ringbuf_shm_t *ringbuf_shm)
     free(ringbuf_shm->name);
 }
 
-void Saving(ringbuf_t *ringbuf, char *name, uint64_t Size, record_item *shared_array){
+void Saving(ringbuf_t *ringbuf, char *name, uint64_t Size, s_array_t *s_array){
     size_t written = PAD(sizeof(uint64_t));
     size_t maximum;
-    sem_wait(sender_sem);
     uint64_t *ptr;
     if ((ptr = ringbuf_write_request_max(ringbuf, written, &maximum))){
-    *ptr = (ringbuf->head/16);
+    pthread_mutex_lock(&s_array->lock);
+    *ptr = s_array->index;
     //save record_item
-    memcpy(shared_array[*ptr].op_name, name, strlen(name)+1);
-    shared_array[*ptr].op_time = get_time();
-    shared_array[*ptr].Memory_usage = Size;
+    memcpy(s_array->shared_array[*ptr].op_name, name, strlen(name)+1);
+    s_array->shared_array[*ptr].op_time = get_time();
+    s_array->shared_array[*ptr].Memory_usage = Size;
+    s_array->index += 1;
+    pthread_mutex_unlock(&s_array->lock);
     ringbuf_write_advance(ringbuf, written);
     }
-    sem_post(sender_sem);
 }
 
-void Reading(ringbuf_t *ringbuf, record_item *shared_array, int shm_fd){
-    uint64_t prev = 0;
+void Reading(ringbuf_t *ringbuf, s_array_t *s_array){
+    while (1){
+    pthread_mutex_lock(&s_array->lock);
     const uint64_t *ptr;
     size_t toread;
-    while (1)
-    {
-        if ((ptr = ringbuf_read_request(ringbuf, &toread))) {
-        if(shared_array[*ptr].op_time < prev){
-            printf("Saving error");
-            munmap(shared_array, sizeof(record_item) * ARRAY_LENGTH);
-            close(shm_fd);
-            shm_unlink("/shm_array");
-            exit(1);
-        }
-        prev = shared_array[*ptr].op_time;
-        printf("Action : %s, op_time : %lld, Memory_usage :%lld \n",shared_array[*ptr].op_name, shared_array[*ptr].op_time, shared_array[*ptr].Memory_usage);
-        ringbuf_read_advance(ringbuf);   
-       }
+    if ((ptr = ringbuf_read_request(ringbuf, &toread))) {
+        printf("%s, %lld, %lld \n",s_array->shared_array[*ptr].op_name, s_array->shared_array[*ptr].op_time, s_array->shared_array[*ptr].Memory_usage);
+        ringbuf_read_advance(ringbuf);  
     }
+    pthread_mutex_unlock(&s_array->lock);
+    }
+}
+
+int shared_array_init(s_array_t* s_array, const char *name, size_t size)
+{
+    strcpy(s_array->name, name);
+    if (! s_array->name)
+        return -1;
+    s_array->init_le_ma = false;
+    s_array->fd = shm_open(s_array->name, O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
+    if (s_array->fd = -1){
+        s_array->init_le_ma = true;
+        s_array->fd = shm_open(s_array->name, O_RDWR, S_IRUSR | S_IWUSR);
+    }
+    if (s_array->fd == -1) {
+        free(s_array->name);
+        return -1;
+    }
+    if ((ftruncate(s_array->fd, size) == -1) ||
+        ((s_array->shared_array = mmap(NULL, size, PROT_READ | PROT_WRITE,
+                                      MAP_SHARED, s_array->fd, 0)) == MAP_FAILED)) {
+        shm_unlink(s_array->name);
+        close(s_array->fd);
+        free(s_array->name);
+        return -1;
+    }
+    if (!s_array->init_le_ma){
+        s_array->index = 0;
+        pthread_mutex_init(&s_array->lock, NULL);
+    }
+    return 0; 
 }

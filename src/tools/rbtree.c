@@ -36,42 +36,12 @@ struct rbtree {
 };
 
 rbtree_t* rbtree_init(const char* name) {
-    if(!Init_le_ma) {// init shared_array and ringbuffer 
-        
-        if(ringbuf_shm_init(&ringbuf_shm, "/ringbuf_shm_test", ARRAY_LENGTH*8, true) != 0){
-            perror("ringbuf_shm_open failed");
-            exit(1);
-        }
-        
-        shm_fd = shm_open("/shm_array", O_CREAT | O_RDWR, 0666);
-        if (shm_fd == -1) {
-            perror("shm_open failed");
-            exit(1);
-        }
-        if (ftruncate(shm_fd, sizeof(record_item) * ARRAY_LENGTH) == -1) {
-            perror("ftruncate failed");
-            shm_unlink("/shm_array");
-            exit(1);
-        }
-        shared_array = mmap(NULL, sizeof(record_item) * ARRAY_LENGTH, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-        if (shared_array == MAP_FAILED) {
-            perror("mmap failed");
-            shm_unlink("/shm_array");
-            exit(1);
-        }
-        sender_sem = sem_open("/sender_sem", O_CREAT, 0644, 1);
-        if (sender_sem == SEM_FAILED) {
-        perror("sem_open failed");
-        exit(1);
-        }
-        Init_le_ma = true;
-    }
     rbtree_t* tree = rbtreeMalloc(sizeof(rbtree_t));
     tree->root = NULL;
     tree->is_unstable = false;
     tree->name = name?name:"(rbtree)";
     //save to ringbuffer
-    Saving(ringbuf_shm.ringbuf, &INDEX_OF_SHARE_ARRAY, "Add tree", sizeof(rbtree_t), shared_array);
+    Saving(ringbuf_shm.ringbuf, "Add tree", sizeof(rbtree_t), &s_array);
     return tree;
 }
 
@@ -80,13 +50,13 @@ static inline void delete_rbnode(rbnode *root) {
     delete_rbnode(root->left);
     delete_rbnode(root->right);
     rbtreeFree(root);
-    Saving(ringbuf_shm.ringbuf, &INDEX_OF_SHARE_ARRAY, "Delete node", sizeof(rbnode), shared_array);
+    Saving(ringbuf_shm.ringbuf, "Delete node", sizeof(rbnode), &s_array);
 }
 
 void rbtree_delete(rbtree_t *tree) {
     delete_rbnode(tree->root);
     rbtreeFree(tree);
-    Saving(ringbuf_shm.ringbuf, &INDEX_OF_SHARE_ARRAY, "Delete tree", sizeof(rbtree_t), shared_array);
+    Saving(ringbuf_shm.ringbuf, "Delete tree", sizeof(rbtree_t), &s_array);
 }
 
 #define IS_LEFT  0x1
@@ -97,7 +67,7 @@ static int add_range_next_to(rbtree_t *tree, rbnode *prev, uintptr_t start, uint
 // printf("Adding %lx-%lx:%hhx next to %p\n", start, end, data, prev);
     rbnode *node = rbtreeMalloc(sizeof(*node));
     if (!node) return -1;
-    Saving(ringbuf_shm.ringbuf, &INDEX_OF_SHARE_ARRAY, "Add node", sizeof(rbnode), shared_array);
+    Saving(ringbuf_shm.ringbuf, "Add node", sizeof(rbnode), &s_array);
     node->start = start;
     node->end = end;
     node->data = data;

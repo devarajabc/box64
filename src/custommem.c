@@ -1885,7 +1885,8 @@ void refreshProtection(uintptr_t addr)
 
 void allocProtection(uintptr_t addr, size_t size, uint32_t prot)
 {
-    if (addr >= 0x100000000LL)
+    uintptr_t Reseved_addr = box64_is32bits?(1ULL<<32):(1ULL<<47);
+    if (addr >= Reseved_addr)
         return;
     dynarec_log(LOG_DEBUG, "allocProtection %p:%p 0x%x\n", (void*)addr, (void*)(addr+size-1), prot);
     size = ALIGN(size);

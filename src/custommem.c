@@ -1885,16 +1885,14 @@ void refreshProtection(uintptr_t addr)
 
 void allocProtection(uintptr_t addr, size_t size, uint32_t prot)
 {
+    if (addr >= 0x100000000LL)
+        return;
     dynarec_log(LOG_DEBUG, "allocProtection %p:%p 0x%x\n", (void*)addr, (void*)(addr+size-1), prot);
     size = ALIGN(size);
     addr &= ~(box64_pagesize-1);
     LOCK_PROT();
-    uint32_t val;
-    uintptr_t endb; 
-    int there = rb_get_end(mapallmem, addr, &val, &endb);
-    // block is here or absent, no half-block handled..
-    if(!there)
-        rb_set(mapallmem, addr, addr+size, MEM_ALLOCATED);
+    // simply insert or merge this range — rb_set() will ignore duplicates
+    rb_set(mapallmem, addr, addr+size, MEM_ALLOCATED);
     UNLOCK_PROT();
     // don't need to add precise tracking probably
 }

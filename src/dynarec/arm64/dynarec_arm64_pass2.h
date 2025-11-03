@@ -31,3 +31,12 @@
 #define FTABLE64(A, V)  do {mmx87_regs_t v = {.d = V}; Table64(dyn, v.q, 2); EMIT(0);} while(0)
 #define CALLRET_RET()   do {dyn->callrets[dyn->callret_size].type = 0; dyn->callrets[dyn->callret_size++].offs = dyn->native_size; EMIT(ARCH_NOP); } while(0)
 #define CALLRET_LOOP()   do {dyn->callrets[dyn->callret_size].type = 1; dyn->callrets[dyn->callret_size++].offs = dyn->native_size; EMIT(ARCH_NOP); } while(0)
+#define BLOCK_PROFILE_PROLOG()  do {                                    \
+        /* Block profiling prolog: 6 instructions */                   \
+        EMIT(0);  /* STP x4, x5, [SP, #-16]! */                        \
+        TABLE64(x4, (uintptr_t)dyn->dynablock); /* LDR (in TABLE64) */ \
+        EMIT(0);  /* ADD x4, x4, offset */                             \
+        EMIT(0);  /* MOVZ x5, 1 */                                     \
+        EMIT(0);  /* LDADD x5, xZR, [x4] */                            \
+        EMIT(0);  /* LDP x4, x5, [SP], #16 */                          \
+    } while(0)

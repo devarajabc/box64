@@ -546,6 +546,43 @@ uintptr_t geted16(dynarec_arm_t* dyn, uintptr_t addr, int ninst, uint8_t nextop,
     return addr;
 }
 
+#if STEP == 3
+// Emit block profiling prolog that atomically increments usage counter
+// Properly uses TABLE64 mechanism and saves/restores registers
+// Only compiled for STEP 3 (code emission pass)
+void emit_block_profile_prolog(dynarec_arm_t* dyn, int ninst)
+{
+    MAYUSE(dyn); MAYUSE(ninst);
+
+    // Save registers x4, x5 to stack (ARM64 requires 16-byte alignment)
+    // STP x4, x5, [SP, #-16]!  (pre-index: SP -= 16, then store)
+    STPx_S7_preindex(x4, x5, xSP, -16);
+
+    // Load dynablock pointer using TABLE64 mechanism
+    // This properly accounts for size in all passes
+    TABLE64(x4, (uintptr_t)dyn->dynablock);
+
+    // Calculate address of usage_count field
+    uint32_t offset = offsetof(dynablock_t, usage_count);
+    ADDx_U12(x4, x4, offset);                        // x4 = &dynablock->usage_count
+
+    // Atomic increment using ARM64 LDADD instruction
+    MOVZx(x5, 1);                                    // x5 = 1
+
+    // Emit LDADD x5, xZR, [x4] instruction
+    // Encoding: 1111 1000 001 Rs 0000 00 Rn Rt
+    // Rs=x5 (value to add), Rn=x4 (address), Rt=xZR (discard result)
+    uint32_t ldadd_inst = 0xF8200000 | (5 << 16) | (4 << 5) | 31;
+    EMIT(ldadd_inst);
+
+    // Restore registers x4, x5 from stack
+    // LDP x4, x5, [SP], #16  (post-index: load, then SP += 16)
+    LDPx_S7_postindex(x4, x5, xSP, 16);
+
+    MESSAGE(LOG_DUMP, "  Block profiling prolog emitted (6 instructions)\n");
+}
+#endif
+
 void jump_to_epilog(dynarec_arm_t* dyn, uintptr_t ip, int reg, int ninst)
 {
     MAYUSE(dyn); MAYUSE(ip); MAYUSE(ninst);

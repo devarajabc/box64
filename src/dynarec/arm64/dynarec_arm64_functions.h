@@ -99,4 +99,7 @@ int is_avx_zero(dynarec_arm_t* dyn, int ninst, int reg);
 int is_avx_zero_unset(dynarec_arm_t* dyn, int ninst, int reg);
 void avx_mark_zero_reset(dynarec_arm_t* dyn, int ninst);
 
+// Block profiling
+void emit_block_profile_prolog(dynarec_arm_t* dyn, int ninst);
+
 #endif //__DYNAREC_ARM_FUNCTIONS_H__

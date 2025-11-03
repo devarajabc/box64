@@ -85,8 +85,14 @@ uintptr_t native_pass(dynarec_native_t* dyn, uintptr_t addr, int alternate, int 
             break;
         }
         #endif
-        if(!ninst && dyn->need_x87check) {
-            NATIVE_RESTORE_X87PC();
+        if(!ninst) {
+            // Emit block profiling prolog at start of block (only if enabled)
+            if(BOX64ENV(dynarec_profile)) {
+                BLOCK_PROFILE_PROLOG();
+            }
+            if(dyn->need_x87check) {
+                NATIVE_RESTORE_X87PC();
+            }
         }
         fpu_propagate_stack(dyn, ninst);
         ip = addr;

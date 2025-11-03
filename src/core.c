@@ -38,6 +38,7 @@
 #include "auxval.h"
 #include "threads.h"
 #include "x64trace.h"
+#include "dynarec/block_profiling.h"
 #include "librarian.h"
 #include "symbols.h"
 #include "emu/x64run_private.h"
@@ -750,6 +751,7 @@ int initialize(int argc, const char **argv, char** env, x64emu_t** emulator, elf
 
     LoadEnvVariables();
     InitializeEnvFiles();
+    init_block_profiling();
 
     const char* prog = argv[1];
     int nextarg = 1;
@@ -1459,6 +1461,7 @@ int emulate(x64emu_t* emu, elfheader_t* elf_header)
         close(BOX64ENV(dynarec_perf_map_fd));
         SET_BOX64ENV(dynarec_perf_map_fd, -1);
     }
+    shutdown_block_profiling();
 #endif
     return ret;
 }

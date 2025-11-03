@@ -2,11 +2,13 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <signal.h>
+#include <time.h>
 
 #include "os.h"
 #include "debug.h"
 #include "box64context.h"
 #include "box64cpu.h"
+#include "block_profiling.h"
 #include "emu/x64emu_private.h"
 #include "x64emu.h"
 #include "box64stack.h"
@@ -146,6 +148,8 @@ void FreeDynablock(dynablock_t* db, int need_lock, int need_remove)
                 dynarec_log(LOG_INFO, "BOX64 Dynarec: lower max_db=%d\n", my_context->max_db_size);
             }
         }
+        // Log block profiling statistics before freeing
+        log_block_free_stats(db);
         if(db->previous)
             FreeInvalidDynablock(db->previous, 0);
         FreeDynarecMap((uintptr_t)db->actual_block);    // will also free db

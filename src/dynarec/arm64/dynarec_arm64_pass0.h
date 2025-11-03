@@ -80,3 +80,5 @@
     do {                                                            \
         if (dyn->need_x87check) dyn->insts[ninst].x87precision = 1; \
     } while (0)
+
+#define BLOCK_PROFILE_PROLOG()  do {} while(0)

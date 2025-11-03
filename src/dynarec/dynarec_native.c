@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <string.h>
 #include <assert.h>
+#include <time.h>
 
 #include "os.h"
 #include "debug.h"
@@ -18,6 +19,7 @@
 #include "x64trace.h"
 #include "dynablock.h"
 #include "dynablock_private.h"
+#include "block_profiling.h"
 
 #include "dynarec_native.h"
 #include "dynarec_arch.h"
@@ -399,6 +401,10 @@ dynablock_t* CreateEmptyBlock(uintptr_t addr, int is32bits, int is_new) {
     block->block = p;
     block->jmpnext = p;
     block->is32bits = is32bits;
+    // Initialize profiling counters
+    atomic_init(&block->usage_count, 0);
+    block->created_time = (uint64_t)time(NULL);
+    block->last_used_time = 0;
     *(dynablock_t**)actual_p = block;
     *(void**)(p+2*sizeof(void*)) = native_epilog;
     CreateJmpNext(block->jmpnext, p+2*sizeof(void*));
@@ -646,7 +652,9 @@ dynablock_t* FillBlock64(uintptr_t addr, int alternate, int is32bits, int inst_m
     size_t insts_rsize = (helper.insts_size+2)*sizeof(instsize_t);
     insts_rsize = (insts_rsize+7)&~7;   // round the size...
     size_t arch_size = ARCH_SIZE(&helper);
+    arch_size = (arch_size+7)&~7;       // round to 8-byte for alignment
     size_t callret_size = helper.callret_size*sizeof(callret_t);
+    callret_size = (callret_size+7)&~7; // round to 8-byte for dynablock alignment
     size_t reloc_size = helper.reloc_size*sizeof(uint32_t);
     // ok, now allocate mapped memory, with executable flag on
     size_t sz = sizeof(void*) + native_size + helper.table64size*sizeof(uint64_t) + 4*sizeof(void*) + insts_rsize + arch_size + callret_size + sizeof(dynablock_t) + reloc_size;
@@ -683,6 +691,7 @@ dynablock_t* FillBlock64(uintptr_t addr, int alternate, int is32bits, int inst_m
     helper.table64 = (uint64_t*)helper.tablestart;
     helper.callrets = (callret_t*)callrets;
     block->table64 = helper.table64;
+    helper.dynablock = block;  // Set dynablock pointer for pass 3 (needed for block profiling)
     if(callret_size)
         memcpy(helper.callrets, static_callrets, helper.callret_size*sizeof(callret_t));
     helper.callret_size = 0;
@@ -720,6 +729,10 @@ dynablock_t* FillBlock64(uintptr_t addr, int alternate, int is32bits, int inst_m
     block->size = sz;
     block->isize = helper.size;
     block->block = p;
+    // Initialize profiling counters
+    atomic_init(&block->usage_count, 0);
+    block->created_time = (uint64_t)time(NULL);
+    block->last_used_time = 0;
     block->jmpnext = next+sizeof(void*);
     block->always_test = helper.always_test;
     block->dirty = block->always_test;
@@ -758,6 +771,8 @@ dynablock_t* FillBlock64(uintptr_t addr, int alternate, int is32bits, int inst_m
         CancelBlock64(0);
         return NULL;
     }
+    // Register block creation for profiling
+    register_block_creation(block);
     if((oldnativesize!=helper.native_size) || (oldtable64size<helper.table64size)) {
         printf_log(LOG_NONE, "Warning, size difference in block between pass2 (%zu, %d) & pass3 (%zu, %d)!\n", oldnativesize+oldtable64size*8, oldsize, helper.native_size+helper.table64size*8, helper.size);
         uint8_t *dump = (uint8_t*)helper.start;

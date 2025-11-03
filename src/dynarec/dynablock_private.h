@@ -1,6 +1,8 @@
 #ifndef __DYNABLOCK_PRIVATE_H_
 #define __DYNABLOCK_PRIVATE_H_
 
+#include <stdatomic.h>
+
 typedef struct instsize_s {
     unsigned char x64:4;
     unsigned char nat:4;
@@ -39,6 +41,10 @@ typedef struct dynablock_s {
     #ifdef GDBJIT
     void*           gdbjit_block;
     #endif
+    // Block profiling
+    _Atomic uint64_t usage_count;      // Number of times block was executed
+    uint64_t        created_time;      // Timestamp when created (seconds)
+    uint64_t        last_used_time;    // Last execution timestamp
 } dynablock_t;
 
 #endif //__DYNABLOCK_PRIVATE_H_

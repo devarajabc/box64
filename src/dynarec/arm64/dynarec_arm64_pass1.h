@@ -32,3 +32,5 @@
                 dyn->need_x87check = 2;         \
         }                                       \
     } while (0)
+
+#define BLOCK_PROFILE_PROLOG()  do {} while(0)

@@ -36,6 +36,7 @@ typedef struct dynablock_s {
     void*           table64;    // to relocate the table64
     size_t          relocsize;  // number of relocations (should be an int only)
     void*           relocs;     // relocations, when block is loaded
+    _Atomic uint64_t usage_count;  // execution frequency counter for profiling
     #ifdef GDBJIT
     void*           gdbjit_block;
     #endif

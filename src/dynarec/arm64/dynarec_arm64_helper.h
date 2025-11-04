@@ -2030,4 +2030,42 @@ uintptr_t dynarec64_AVX_F3_0F38(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip
             avx_purge_ymm(dyn, ninst, dyn->insts[ninst + 1].purge_ymm, x1); \
     } while (0)
 
+// Emit profiling code at start of block
+// IMPORTANT: This must be a macro, not a function!
+// When called from native_pass.c in Pass 2 (STEP=2), EMIT must count bytes
+// When called from native_pass.c in Pass 3 (STEP=3), EMIT must emit actual code
+// Functions get compiled once per STEP with fixed EMIT behavior, but macros
+// expand at call site with correct STEP-aware EMIT behavior from calling file
+#define EMIT_BLOCK_PROFILE_PROLOG(dyn, ninst) do {                              \
+    MAYUSE(dyn);                                                                \
+    MAYUSE(ninst);                                                              \
+                                                                                \
+    /* 1. Save registers (16-byte stack alignment) */                          \
+    STPx_S7_preindex(x4, x5, xSP, -16);                                        \
+                                                                                \
+    /* 2. Load dynablock_t* from self-pointer at block-8 */                    \
+    /* PC during LDR = block+4, self-pointer at block-8, offset = -12 */      \
+    LDRx_literal(x4, -12);                                                     \
+                                                                                \
+    /* 3. Calculate address of usage_count field */                            \
+    {                                                                           \
+        uint32_t offset = offsetof(dynablock_t, usage_count);                  \
+        ADDx_U12(x4, x4, offset);                                              \
+    }                                                                           \
+                                                                                \
+    /* 4. Load immediate value 1 */                                            \
+    MOVZx(x5, 1);                                                              \
+                                                                                \
+    /* 5. Atomic increment using LDADD (ARMv8.1 LSE) */                        \
+    {                                                                           \
+        uint32_t ldadd_inst = 0xF8200000 | (5 << 16) | (4 << 5) | 31;         \
+        EMIT(ldadd_inst);                                                      \
+    }                                                                           \
+                                                                                \
+    /* 6. Restore registers */                                                 \
+    LDPx_S7_postindex(x4, x5, xSP, 16);                                        \
+                                                                                \
+    MESSAGE(LOG_DUMP, "  Block profiling prolog emitted (24 bytes, 6 instructions)\n"); \
+} while(0)
+
 #endif //__DYNAREC_ARM64_HELPER_H__

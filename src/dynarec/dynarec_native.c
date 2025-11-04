@@ -392,6 +392,7 @@ dynablock_t* CreateEmptyBlock(uintptr_t addr, int is32bits, int is_new) {
     memset(block, 0, sizeof(dynablock_t));
     // fill the block
     block->x64_addr = (void*)addr;
+    block->usage_count = 0;  // Initialize profiling counter
     block->isize = 0;
     block->done = 0;
     block->size = sz;
@@ -648,7 +649,9 @@ dynablock_t* FillBlock64(uintptr_t addr, int alternate, int is32bits, int inst_m
     size_t insts_rsize = (helper.insts_size+2)*sizeof(instsize_t);
     insts_rsize = (insts_rsize+7)&~7;   // round the size...
     size_t arch_size = ARCH_SIZE(&helper);
+    arch_size = (arch_size+7)&~7;       // round to 8-byte for alignment
     size_t callret_size = helper.callret_size*sizeof(callret_t);
+    callret_size = (callret_size+7)&~7; // round to 8-byte for dynablock alignment
     size_t reloc_size = helper.reloc_size*sizeof(uint32_t);
     // ok, now allocate mapped memory, with executable flag on
     size_t sz = sizeof(void*) + native_size + helper.table64size*sizeof(uint64_t) + 4*sizeof(void*) + insts_rsize + arch_size + callret_size + sizeof(dynablock_t) + reloc_size;
@@ -671,6 +674,7 @@ dynablock_t* FillBlock64(uintptr_t addr, int alternate, int is32bits, int inst_m
     void* relocs = helper.need_reloc?(block+1):NULL;
     // fill the block
     block->x64_addr = (void*)addr;
+    block->usage_count = 0;  // Initialize profiling counter
     block->isize = 0;
     block->actual_block = actual_p;
     helper.relocs = relocs;

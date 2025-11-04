@@ -86,9 +86,19 @@ uintptr_t native_pass(dynarec_native_t* dyn, uintptr_t addr, int alternate, int 
             break;
         }
         #endif
+        // STEP 1: Emit profiling FIRST (must be at position 0 for PC-relative -12)
+        // This ensures the hardcoded PC-relative offset in EMIT_BLOCK_PROFILE_PROLOG works correctly
+        if(!ninst) {
+            #if defined(ARM64) && (STEP == 2 || STEP == 3)
+            EMIT_BLOCK_PROFILE_PROLOG(dyn, ninst);
+            #endif
+        }
+        // STEP 2: Emit NATIVE_RESTORE_X87PC after profiling (if needed)
+        // This was previously emitted BEFORE profiling, breaking the PC-relative offset
         if(!ninst && dyn->need_x87check) {
             NATIVE_RESTORE_X87PC();
         }
+
         ip = addr;
         #ifdef ARM64
         if(!ninst && dyn->insts[0].preload_xmmymm) {
@@ -97,6 +107,11 @@ uintptr_t native_pass(dynarec_native_t* dyn, uintptr_t addr, int alternate, int 
         }
         #endif
         fpu_propagate_stack(dyn, ninst);
+        // STEP 3: FPU stack propagation and address setup
+        fpu_propagate_stack(dyn, ninst);
+        ip = addr;
+        // STEP 4: Reset handling
+
         if (reset_n!=-1) {
             dyn->last_ip = 0;
             if(reset_n==-2) {
@@ -124,14 +139,24 @@ uintptr_t native_pass(dynarec_native_t* dyn, uintptr_t addr, int alternate, int 
         else if(ninst && (dyn->insts[ninst].pred_sz>1 || (dyn->insts[ninst].pred_sz==1 && dyn->insts[ninst].pred[0]!=ninst-1)))
             dyn->last_ip = 0;   // reset IP if some jump are coming here
         #endif
+        // STEP 5: NEW_INST
         NEW_INST;
         MESSAGE(LOG_DUMP, "New Instruction %s:%p, native:%p\n", is32bits?"x86":"x64",(void*)addr, (void*)dyn->block);
+        // STEP 6: CALLRET_LOOP
         #ifdef ARCH_NOP
         if(dyn->insts[ninst].x64.alive && dyn->insts[ninst].x64.self_loop)
             CALLRET_LOOP();
         #endif
+        // STEP 7: GOTEST and address fix
+        // GOTEST is emitted after NEW_INST to avoid interfering with the profiling prolog
         if(!ninst) {
             GOTEST(x1, x2);
+            #if defined(ARM64) && STEP == 2
+            // All overhead (profiling, NATIVE_RESTORE_X87PC, GOTEST) has been added to insts[0].size
+            // native_size now contains all overhead, insts[0].size should start at 0
+            dyn->insts[0].address = dyn->native_size;  // Store overhead as address offset
+            dyn->insts[0].size = 0;  // Reset size for actual instruction translation
+            #endif
         }
         if(dyn->insts[ninst].pred_sz>1) {SMEND();}
         #if STEP > 1

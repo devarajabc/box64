@@ -21,6 +21,7 @@
 #include "dynarec_native.h"
 #include "dynarec_arch.h"
 #include "native_lock.h"
+#include "dynarec_stats.h"
 
 #include "custommem.h"
 #include "khash.h"
@@ -148,6 +149,10 @@ void FreeDynablock(dynablock_t* db, int need_lock, int need_remove)
         }
         if(db->previous)
             FreeInvalidDynablock(db->previous, 0);
+
+        // Remove from global tracking list
+        remove_block_from_stats(db);
+
         FreeDynarecMap((uintptr_t)db->actual_block);    // will also free db
         if(need_lock)
             mutex_unlock(&my_context->mutex_dyndump);

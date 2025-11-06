@@ -2065,7 +2065,7 @@ uintptr_t dynarec64_AVX_F3_0F38(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip
     /* 6. Restore registers */                                                 \
     LDPx_S7_postindex(x4, x5, xSP, 16);                                        \
                                                                                 \
-    MESSAGE(LOG_DUMP, "  Block profiling prolog emitted (24 bytes, 6 instructions)\n"); \
+    MESSAGE(LOG_DUMP, "Block profiling prolog emitted (24 bytes, 6 instructions)\n"); \
 } while(0)
 
 #endif //__DYNAREC_ARM64_HELPER_H__

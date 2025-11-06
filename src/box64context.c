@@ -24,6 +24,9 @@
 #include "gltools.h"
 #include "rbtree.h"
 #include "box64cpu.h"
+#ifdef DYNAREC
+#include "dynarec/dynarec_stats.h"
+#endif
 #ifdef BOX32
 #include "box32.h"
 #endif
@@ -232,6 +235,8 @@ box64context_t *NewBox64Context(int argc)
     
     #ifdef DYNAREC
     context->db_sizes = rbtree_init("db_sizes");
+    // Initialize block statistics with 500 execution reporting interval
+    init_block_stats(500);
     #endif
 
     return context;
@@ -329,6 +334,8 @@ void FreeBox64Context(box64context_t** context)
 
 #ifdef DYNAREC
     //dynarec_log(LOG_INFO, "BOX64 Dynarec at exit: Max DB=%d, rightmost=%d\n", ctx->max_db_size, rb_get_rightmost(ctx->db_sizes));
+    // Final stats report and cleanup
+    cleanup_block_stats();
     rbtree_delete(ctx->db_sizes);
 #endif
 

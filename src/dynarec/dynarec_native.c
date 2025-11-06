@@ -22,6 +22,7 @@
 #include "dynarec_native.h"
 #include "dynarec_arch.h"
 #include "dynarec_next.h"
+#include "dynarec_stats.h"
 #include "gdbjit.h"
 #include "khash.h"
 
@@ -405,6 +406,10 @@ dynablock_t* CreateEmptyBlock(uintptr_t addr, int is32bits, int is_new) {
     CreateJmpNext(block->jmpnext, p+2*sizeof(void*));
     // all done...
     ClearCache(actual_p+sizeof(void*), 3*sizeof(void*));   // need to clear the cache before execution...
+
+    // Add to global tracking list
+    add_block_to_stats(block);
+
     return block;
 }
 
@@ -810,5 +815,9 @@ dynablock_t* FillBlock64(uintptr_t addr, int alternate, int is32bits, int inst_m
     }
     redundant_helper = current_helper = NULL;
     //block->done = 1;
+
+    // Add to global tracking list
+    add_block_to_stats(block);
+
     return block;
 }

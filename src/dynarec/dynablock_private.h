@@ -37,6 +37,7 @@ typedef struct dynablock_s {
     size_t          relocsize;  // number of relocations (should be an int only)
     void*           relocs;     // relocations, when block is loaded
     _Atomic uint64_t usage_count;  // execution frequency counter for profiling
+    _Atomic struct dynablock_s* next_in_stats;  // For global tracking list
     #ifdef GDBJIT
     void*           gdbjit_block;
     #endif

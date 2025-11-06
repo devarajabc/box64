@@ -389,7 +389,6 @@ set(ELFLOADER_SRC
     "${BOX64_ROOT}/src/custommem.c"
     "${BOX64_ROOT}/src/custommmap.c"
     "${BOX64_ROOT}/src/dynarec/dynarec.c"
-    "${BOX64_ROOT}/src/dynarec/dynarec_stats.c"
     "${BOX64_ROOT}/src/elfs/elfloader.c"
     "${BOX64_ROOT}/src/elfs/elfparser.c"
     "${BOX64_ROOT}/src/elfs/elfhash.c"
@@ -930,6 +929,7 @@ if(DYNAREC)
         "${BOX64_ROOT}/src/dynarec/dynablock.c"
         "${BOX64_ROOT}/src/dynarec/dynarec_native.c"
         "${BOX64_ROOT}/src/dynarec/dynarec_native_functions.c"
+        "${BOX64_ROOT}/src/dynarec/dynarec_stats.c"
         "${BOX64_ROOT}/src/dynarec/dynacache_reloc.c"
         "${BOX64_ROOT}/src/emu/x64test.c"
     )

@@ -3,13 +3,23 @@
 
 #include <stdint.h>
 #include <stdatomic.h>
+#include <stdio.h>
 #include "dynablock_private.h"
-#include "mypthread.h"
+#ifndef _WIN32
+#include <pthread.h>  // For Linux/Unix builds
+#endif
+#include "mypthread.h"  // Provides pthread wrappers (WOW64) or passthrough (Linux)
+
+// Forward declaration
+typedef struct box64context_s box64context_t;
 
 // Global statistics structure
 typedef struct dynablock_stats_s {
+    // Context reference
+    box64context_t* context;                     // Box64 context (for mutex access)
+
     // List of all living dynamic blocks
-    _Atomic(dynablock_t*) head;                  // Lock-free list head
+    dynablock_t* head;                           // List head (protected by mutex_dyndump)
 
     // Counters
     _Atomic uint64_t total_blocks_created;      // Total blocks ever created
@@ -31,8 +41,8 @@ typedef struct dynablock_stats_s {
 } dynablock_stats_t;
 
 // API Functions
-void init_block_stats(uint64_t report_interval);
-void cleanup_block_stats(void);
+void init_block_stats(box64context_t* context, uint64_t report_interval);
+void cleanup_block_stats(box64context_t* context);
 void add_block_to_stats(dynablock_t* block);
 void remove_block_from_stats(dynablock_t* block);
 void print_block_stats(void);

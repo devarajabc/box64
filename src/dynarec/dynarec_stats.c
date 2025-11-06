@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <string.h>
+#include <time.h>
 
 #include "debug.h"
 #include "dynarec_stats.h"
@@ -13,11 +14,9 @@
 // Global statistics instance
 static dynablock_stats_t global_stats = {0};
 
-// External reference to Box64 context
-extern box64context_t *my_context;
-
-// Forward declaration for stats thread
+// Forward declarations
 static void* stats_thread_func(void* arg);
+static void atfork_child_stats(void);
 
 // Helper function to format memory sizes
 static const char* format_memory(uint64_t bytes, char* buffer, size_t bufsize) {
@@ -31,31 +30,55 @@ static const char* format_memory(uint64_t bytes, char* buffer, size_t bufsize) {
     return buffer;
 }
 
+// Handle fork in child process
+static void atfork_child_stats(void)
+{
+    // After fork, only the calling thread exists in the child
+    // The stats thread does not exist, so we need to reset state
+
+    // Close the file descriptor (it's shared with parent)
+    if(global_stats.stats_file) {
+        fclose(global_stats.stats_file);
+        global_stats.stats_file = NULL;
+    }
+
+    // Reset stats thread state
+    global_stats.stats_thread = 0;
+    atomic_store(&global_stats.stats_thread_running, 0);
+    atomic_store(&global_stats.stats_requested, 0);
+
+    // Don't restart stats collection in child process
+    // The child inherits the block list but won't track new stats
+}
+
 // Calculate total executions by summing all usage_counts
 static uint64_t calculate_total_executions(void)
 {
     uint64_t total = 0;
 
-    mutex_lock(&my_context->mutex_dyndump);
+    if(!global_stats.context) return 0;
 
-    dynablock_t* current = (dynablock_t*)atomic_load(&global_stats.head);
+    mutex_lock(&global_stats.context->mutex_dyndump);
+
+    dynablock_t* current = global_stats.head;
     while(current) {
         total += atomic_load(&current->usage_count);
-        current = (dynablock_t*)atomic_load(&current->next_in_stats);
+        current = current->next_in_stats;
     }
 
-    mutex_unlock(&my_context->mutex_dyndump);
+    mutex_unlock(&global_stats.context->mutex_dyndump);
 
     return total;
 }
 
 // Initialize statistics system
-void init_block_stats(uint64_t report_interval)
+void init_block_stats(box64context_t* context, uint64_t report_interval)
 {
     dynarec_log(LOG_INFO, "Initializing block statistics (report every %lu executions)\n",
                 report_interval);
 
-    atomic_store(&global_stats.head, NULL);
+    global_stats.context = context;
+    global_stats.head = NULL;
     atomic_store(&global_stats.total_blocks_created, 0);
     atomic_store(&global_stats.total_blocks_freed, 0);
     atomic_store(&global_stats.total_executions, 0);
@@ -66,6 +89,9 @@ void init_block_stats(uint64_t report_interval)
     atomic_store(&global_stats.stats_thread_running, 1);
     atomic_store(&global_stats.stats_requested, 0);
 
+    // Register fork handler to clean up in child process
+    pthread_atfork(NULL, NULL, atfork_child_stats);
+
     // Open stats file for writing
     global_stats.stats_file = fopen("box64_block_stats.txt", "w");
     if(!global_stats.stats_file) {
@@ -73,7 +99,7 @@ void init_block_stats(uint64_t report_interval)
     } else {
         fprintf(global_stats.stats_file, "# Box64 Dynamic Block Statistics\n");
         fprintf(global_stats.stats_file, "# Report interval: every %lu block executions\n", report_interval);
-        fprintf(global_stats.stats_file, "# Format: [Timestamp] Blocks: total, low_usage_count (percentage%%) | Memory: total, low_usage_memory (percentage%%)\n\n");
+        fprintf(global_stats.stats_file, "# Format: [YYYY-MM-DD HH:MM:SS] Blocks: X total(XMB total), Y (Z%%) executed <=1 times(YMB (Z%%))\n\n");
         fflush(global_stats.stats_file);
     }
 
@@ -87,7 +113,7 @@ void init_block_stats(uint64_t report_interval)
 // Add newly created block to the global list
 void add_block_to_stats(dynablock_t* block)
 {
-    if(!block) return;
+    if(!block || !global_stats.context) return;
 
     // IMPORTANT: This function is called from FillBlock64(),
     // which already holds my_context->mutex_dyndump.
@@ -96,13 +122,9 @@ void add_block_to_stats(dynablock_t* block)
     dynarec_log(LOG_DEBUG, "Adding block %p to stats (x64=%p, size=%lu)\n",
                 block, block->x64_addr, block->x64_size);
 
-    // Initialize next pointer
-    atomic_store(&block->next_in_stats, (dynablock_t*)NULL);
-
     // Add to head of list (simple prepend)
-    dynablock_t* old_head = (dynablock_t*)atomic_load(&global_stats.head);
-    atomic_store(&block->next_in_stats, (dynablock_t*)old_head);
-    atomic_store(&global_stats.head, (dynablock_t*)block);
+    block->next_in_stats = global_stats.head;
+    global_stats.head = block;
 
     // Update counter
     atomic_fetch_add(&global_stats.total_blocks_created, 1);
@@ -114,7 +136,7 @@ void add_block_to_stats(dynablock_t* block)
 // Remove block from the global list when it's being freed
 void remove_block_from_stats(dynablock_t* block)
 {
-    if(!block) return;
+    if(!block || !global_stats.context) return;
 
     // IMPORTANT: This function is called from FreeDynablock(),
     // which already holds my_context->mutex_dyndump.
@@ -126,7 +148,7 @@ void remove_block_from_stats(dynablock_t* block)
     // Simple linear scan to remove
     // This is O(N) but block deletion is rare
 
-    dynablock_t* current = (dynablock_t*)atomic_load(&global_stats.head);
+    dynablock_t* current = global_stats.head;
     dynablock_t* prev = NULL;
 
     while(current) {
@@ -134,12 +156,10 @@ void remove_block_from_stats(dynablock_t* block)
             // Found it! Unlink
             if(prev) {
                 // Middle or end of list
-                dynablock_t* next = (dynablock_t*)atomic_load(&current->next_in_stats);
-                atomic_store(&prev->next_in_stats, (dynablock_t*)next);
+                prev->next_in_stats = current->next_in_stats;
             } else {
                 // Head of list
-                dynablock_t* next = (dynablock_t*)atomic_load(&current->next_in_stats);
-                atomic_store(&global_stats.head, (dynablock_t*)next);
+                global_stats.head = current->next_in_stats;
             }
 
             atomic_fetch_add(&global_stats.total_blocks_freed, 1);
@@ -150,7 +170,7 @@ void remove_block_from_stats(dynablock_t* block)
         }
 
         prev = current;
-        current = (dynablock_t*)atomic_load(&current->next_in_stats);
+        current = current->next_in_stats;
     }
 
     dynarec_log(LOG_INFO, "Warning: Block %p not found in stats list during removal\n", block);
@@ -159,8 +179,10 @@ void remove_block_from_stats(dynablock_t* block)
 // Print statistics with memory information
 void print_block_stats(void)
 {
+    if(!global_stats.context) return;
+
     // Acquire mutex to ensure stable list during iteration
-    mutex_lock(&my_context->mutex_dyndump);
+    mutex_lock(&global_stats.context->mutex_dyndump);
 
     uint64_t total_blocks = 0;
     uint64_t blocks_never_executed = 0;
@@ -175,7 +197,7 @@ void print_block_stats(void)
 
     dynarec_log(LOG_DEBUG, "Scanning block stats...\n");
 
-    dynablock_t* current = (dynablock_t*)atomic_load(&global_stats.head);
+    dynablock_t* current = global_stats.head;
     while(current) {
         total_blocks++;
 
@@ -195,10 +217,10 @@ void print_block_stats(void)
             memory_executed_multiple += block_size;
         }
 
-        current = (dynablock_t*)atomic_load(&current->next_in_stats);
+        current = current->next_in_stats;
     }
 
-    mutex_unlock(&my_context->mutex_dyndump);
+    mutex_unlock(&global_stats.context->mutex_dyndump);
 
     // Calculate block statistics
     uint64_t blocks_low_usage = blocks_never_executed + blocks_executed_once;
@@ -216,20 +238,24 @@ void print_block_stats(void)
     format_memory(total_memory, total_mem_str, sizeof(total_mem_str));
     format_memory(memory_low_usage, low_usage_mem_str, sizeof(low_usage_mem_str));
 
+    // Get current timestamp
+    time_t now = time(NULL);
+    struct tm* tm_info = localtime(&now);
+    char timestamp[32];
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", tm_info);
+
     // Write to stats file (if open)
     if(global_stats.stats_file) {
-        fprintf(global_stats.stats_file, "[BOX64 STATS] Blocks: %lu total, %lu (%.1f%%) executed <=1 times\n",
-                total_blocks, blocks_low_usage, block_percentage);
-        fprintf(global_stats.stats_file, "[BOX64 STATS] Memory: %s total, %s (%.1f%%) in blocks executed <=1 times\n",
-                total_mem_str, low_usage_mem_str, memory_percentage);
+        fprintf(global_stats.stats_file, "[%s] Blocks: %lu total(%s total), %lu (%.1f%%) executed <=1 times(%s (%.1f%%))\n",
+                timestamp, total_blocks, total_mem_str, blocks_low_usage, block_percentage,
+                low_usage_mem_str, memory_percentage);
         fflush(global_stats.stats_file);
     }
 
     // Also print to console for debugging
-    dynarec_log(LOG_INFO, "[BOX64 STATS] Blocks: %lu total, %lu (%.1f%%) executed <=1 times\n",
-                total_blocks, blocks_low_usage, block_percentage);
-    dynarec_log(LOG_INFO, "[BOX64 STATS] Memory: %s total, %s (%.1f%%) in blocks executed <=1 times\n",
-                total_mem_str, low_usage_mem_str, memory_percentage);
+    dynarec_log(LOG_INFO, "[%s] Blocks: %lu total(%s total), %lu (%.1f%%) executed <=1 times(%s (%.1f%%))\n",
+                timestamp, total_blocks, total_mem_str, blocks_low_usage, block_percentage,
+                low_usage_mem_str, memory_percentage);
 
     // Detailed debug output
     dynarec_log(LOG_DEBUG, "  Block breakdown:\n");
@@ -254,8 +280,10 @@ void request_block_stats(void)
 }
 
 // Cleanup statistics system
-void cleanup_block_stats(void)
+void cleanup_block_stats(box64context_t* context)
 {
+    if(!context) return;
+
     dynarec_log(LOG_INFO, "Cleaning up block statistics\n");
 
     // Signal stats thread to stop
@@ -266,8 +294,19 @@ void cleanup_block_stats(void)
         pthread_join(global_stats.stats_thread, NULL);
     }
 
-    // Print final statistics
-    print_block_stats();
+    // Print final statistics if context is still valid
+    if(global_stats.context == context) {
+        print_block_stats();
+    }
+
+    // Close stats file
+    if(global_stats.stats_file) {
+        fclose(global_stats.stats_file);
+        global_stats.stats_file = NULL;
+    }
+
+    // Clear context pointer
+    global_stats.context = NULL;
 
     // List will be cleaned up when blocks are freed
     dynarec_log(LOG_INFO, "Block statistics cleanup complete\n");

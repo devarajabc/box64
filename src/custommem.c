@@ -66,6 +66,47 @@ pthread_mutex_t     mutex_blocks;
 pthread_mutex_t     mutex_prot;
 pthread_mutex_t     mutex_blocks;
 #endif
+
+#if defined(__GNUC__) || defined(__clang__)
+    static inline int bit_ctz16(uint16_t x) {
+        return (x == 0) ? 16 : __builtin_ctz((uint32_t)x);
+    }
+    static inline int bit_ctz8(uint8_t x) {
+        return (x == 0) ? 8 : __builtin_ctz((uint32_t)x);
+    }
+    static inline int bit_find_first_zero16(uint16_t x) {
+        return bit_ctz16(~x);
+    }
+    static inline int bit_find_first_zero8(uint8_t x) {
+        return bit_ctz8(~x);
+    }
+#else
+    static inline int bit_ctz16(uint16_t x) {
+        if (x == 0) return 16;
+        int count = 0;
+        while ((x & 1) == 0) {
+            x >>= 1;
+            count++;
+        }
+        return count;
+    }
+    static inline int bit_ctz8(uint8_t x) {
+        if (x == 0) return 8;
+        int count = 0;
+        while ((x & 1) == 0) {
+            x >>= 1;
+            count++;
+        }
+        return count;
+    }
+    static inline int bit_find_first_zero16(uint16_t x) {
+        return bit_ctz16(~x);
+    }
+    static inline int bit_find_first_zero8(uint8_t x) {
+        return bit_ctz8(~x);
+    }
+#endif
+
 //#define TRACE_MEMSTAT
 rbtree_t* memprot = NULL;
 int have48bits = 0;
@@ -92,7 +133,6 @@ typedef struct blocklist_s {
     size_t              maxfree;
     size_t              size;
     void*               first;
-    uint32_t            lowest;
     uint8_t             type;       // could use 7bits for type and 1bit fot is32bits,
     uint8_t             is32bits;   // but that wont really change the size of structure anyway
 } blocklist_t;
@@ -584,21 +624,26 @@ void* map128_customMalloc(size_t size, int is32bits)
     mutex_lock(&mutex_blocks);
     for(int i=0; i<n_blocks; ++i) {
         if(p_blocks[i].block && (p_blocks[i].type == BTYPE_MAP) && p_blocks[i].maxfree && (p_blocks[i].is32bits==is32bits)) {
-            // look for a free block
+            // look for a free block - optimized with bit-scan intrinsics
             uint8_t* map = p_blocks[i].first;
-            for(uint32_t idx=p_blocks[i].lowest; idx<(p_blocks[i].size>>7); ++idx) {
-                if(!(idx&7) && map[idx>>3]==0xff)
-                    idx+=7;
-                else if(!(map[idx>>3]&(1<<(idx&7)))) {
-                    map[idx>>3] |= 1<<(idx&7);
-                    p_blocks[i].maxfree -= 128;
-                    p_blocks[i].lowest = idx+1;
-                    mutex_unlock(&mutex_blocks);
-                    return p_blocks[i].block+(idx<<7);
-                }
+            uint32_t slices = p_blocks[i].size >> 7;
+            uint32_t num_bytes = (slices + 7) >> 3;
+
+            for (uint32_t byte_idx = 0; byte_idx < num_bytes; ++byte_idx) {
+                uint8_t byte = map[byte_idx];
+                if (byte == 0xFF)
+                    continue;
+                int bit_pos = bit_find_first_zero8(byte);
+                if (bit_pos >= 8)
+                    continue; 
+                map[byte_idx] |= (1u << bit_pos);
+                uint32_t idx = (byte_idx << 3) + bit_pos;
+                p_blocks[i].maxfree -= 128;
+                mutex_unlock(&mutex_blocks);
+                return (void*)((uintptr_t)p_blocks[i].block + (idx << 7));
             }
             #ifdef TRACE_MEMSTAT
-            printf_log(LOG_INFO, "Warning, customme p_block[%d] MAP has maxfree=%d and lowest=%d but not free block found\n", i, p_blocks[i].maxfree, p_blocks[i].lowest);
+            printf_log(LOG_INFO, "Warning, customme p_block[%d] MAP has maxfree=%d but not free block found\n", i, p_blocks[i].maxfree);
             #endif
         }
     }
@@ -669,7 +714,6 @@ void* map128_customMalloc(size_t size, int is32bits)
     // alloc 1st block
     void* ret = p_blocks[i].block;
     map[0] |= 1;
-    p_blocks[i].lowest = 1;
     p_blocks[i].maxfree = allocsize - (mapsize+128);
     mutex_unlock(&mutex_blocks);
     add_blockstree((uintptr_t)p, (uintptr_t)p+allocsize, i);
@@ -698,23 +742,27 @@ void* map64_customMalloc(size_t size, int is32bits)
          && p_blocks[i].maxfree
          && (p_blocks[i].is32bits==is32bits)
         ) {
+            // Optimized with bit-scan intrinsics for 16-bit words
             uint16_t* map = p_blocks[i].first;
-            uint32_t slices = p_blocks[i].size >> 6; 
-            for (uint32_t idx = p_blocks[i].lowest; idx < slices; ++idx) {
-                if (!(idx & 15) && map[idx >> 4] == 0xFFFF)
-                    idx += 15;
-                else if (!(map[idx >> 4] & (1u << (idx & 15)))) {
-                    map[idx >> 4] |= 1u << (idx & 15);
-                    p_blocks[i].maxfree -= 64;
-                    p_blocks[i].lowest = idx + 1;
-                    mutex_unlock(&mutex_blocks);
-                    return p_blocks[i].block + (idx << 6);
-                }
+            uint32_t slices = p_blocks[i].size >> 6;
+            uint32_t num_words = (slices + 15) >> 4;
+            for (uint32_t word_idx = 0; word_idx < num_words; ++word_idx) {
+                uint16_t word = map[word_idx];
+                if (word == 0xFFFF)
+                    continue;
+                int bit_pos = bit_find_first_zero16(word);
+                if (bit_pos >= 16)
+                    continue; 
+                map[word_idx] |= (1u << bit_pos);
+                uint32_t idx = (word_idx << 4) + bit_pos;
+                p_blocks[i].maxfree -= 64;
+                mutex_unlock(&mutex_blocks);
+                return (void*)((uintptr_t)p_blocks[i].block + (idx << 6));
             }
             #ifdef TRACE_MEMSTAT
             printf_log(LOG_INFO,
-                "Warning: MAP has maxfree=%d and lowest=%d but no free 64 B slice found\n",
-                p_blocks[i].maxfree, p_blocks[i].lowest);
+                "Warning: MAP has maxfree=%d but no free 64 B slice found\n",
+                p_blocks[i].maxfree);
             #endif
         }
     }
@@ -771,7 +819,6 @@ void* map64_customMalloc(size_t size, int is32bits)
 
     void* ret = p_blocks[i].block;
     map[0] |= 1u;
-    p_blocks[i].lowest  = 1;
     p_blocks[i].maxfree = allocsize - (mapsize + 64);
 
     mutex_unlock(&mutex_blocks);
@@ -1018,8 +1065,6 @@ void internal_customFree(void* p, int is32bits)
             #ifdef TRACE_MEMSTAT
             else printf_log(LOG_INFO, "Warning, customme free(%p) from MAP block %p, but not found as allocated\n", p, l);
             #endif
-            if(l->lowest>idx)
-                l->lowest = idx;
             mutex_unlock(&mutex_blocks);
             return;
         }else{
@@ -1033,8 +1078,6 @@ void internal_customFree(void* p, int is32bits)
             #ifdef TRACE_MEMSTAT
             else printf_log(LOG_INFO, "Warning, customme free(%p) from MAP block %p, but not found as allocated\n", p, l);
             #endif
-            if(l->lowest>idx)
-                l->lowest = idx;
             mutex_unlock(&mutex_blocks);
             return;
         }

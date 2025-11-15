@@ -809,9 +809,39 @@ dynablock_t* FillBlock64(uintptr_t addr, int alternate, int is32bits, int inst_m
     return block;
 }
 
-// Logging function for dynablock entry
+// Binary logging: much more compact and faster than text
+// Format: [uint64_t native_addr][uint64_t x64_addr] = 16 bytes per entry
+// Text format would be ~50 bytes per entry (3x larger!)
+
+// Choose logging format:
+// 0 = Binary logging (compact, fast, 100% accurate, requires binary parser)
+// 1 = Text logging (human readable, larger files)
+#define USE_BINARY_LOGGING 1
+
+#if USE_BINARY_LOGGING
+// Binary logging to stderr (so stdout stays clean for program output)
 void log_dynablock_entry(x64emu_t* emu, void* native_addr, uintptr_t x64_addr) {
-    (void)emu; // Unused, but needed for calling convention
-    printf("[DYNABLOCK] %p -> x64:0x%lx\n", native_addr, x64_addr);
+    (void)emu;
+
+    struct {
+        uint64_t native;
+        uint64_t x64;
+    } entry;
+
+    entry.native = (uint64_t)native_addr;
+    entry.x64 = x64_addr;
+
+    // Write binary data to stderr
+    fwrite(&entry, sizeof(entry), 1, stderr);
+}
+#else
+// Text logging to stdout
+void log_dynablock_entry(x64emu_t* emu, void* native_addr, uintptr_t x64_addr) {
+    (void)emu;
+    static _Atomic uint64_t counter = 0;
+    uint64_t count = ++counter;
+
+    printf("[DYNABLOCK] %p -> x64:0x%lx (count=%lu)\n", native_addr, x64_addr, count);
     fflush(stdout);
 }
+#endif

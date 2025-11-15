@@ -133,8 +133,9 @@ uintptr_t native_pass(dynarec_native_t* dyn, uintptr_t addr, int alternate, int 
         if(!ninst) {
             GOTEST(x1, x2);
 
-            #if STEP == 3
+            #if STEP > 1
             // Log dynablock entry - xEmu (x0) is automatically first param
+            // STEP > 1 ensures this runs in pass2 (size calc) and pass3 (code emit)
             MOV64x(x1, (uintptr_t)dyn->block);             // 2nd param: native block address
             MOV64x(x2, addr);                              // 3rd param: x64 RIP address
             CALL_S(const_log_dynablock_entry, -1);        // Call logger, no return value

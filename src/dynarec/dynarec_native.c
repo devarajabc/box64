@@ -808,3 +808,9 @@ dynablock_t* FillBlock64(uintptr_t addr, int alternate, int is32bits, int inst_m
     //block->done = 1;
     return block;
 }
+
+// Logging function for dynablock entry
+void log_dynablock_entry(void* native_addr, uintptr_t x64_addr) {
+    printf("[DYNABLOCK] %p -> x64:0x%lx\n", native_addr, x64_addr);
+    fflush(stdout);
+}

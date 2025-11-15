@@ -22,6 +22,7 @@
 #include "emu/x64compstrings.h"
 #include "x64test.h"
 #include "dynarec/dynarec_next.h"
+#include "dynarec_native.h"
 
 static const int8_t mask_shift8[] = { -7, -6, -5, -4, -3, -2, -1, 0 };
 static const int8_t mask_string8[] = { 7, 6, 5, 4, 3, 2, 1, 0 };
@@ -135,6 +136,7 @@ uintptr_t getConst(arm64_consts_t which)
         case const_4f_1_m1_1_m1: return (uintptr_t)&subaddps;
         case const_2d_m1_1: return (uintptr_t)&addsubpd;
         case const_2d_1_m1: return (uintptr_t)&subaddpd;
+        case const_log_dynablock_entry: return (uintptr_t)log_dynablock_entry;
 
         case const_last: dynarec_log(LOG_NONE, "Warning, const last used\n");
             return 0;

@@ -810,7 +810,8 @@ dynablock_t* FillBlock64(uintptr_t addr, int alternate, int is32bits, int inst_m
 }
 
 // Logging function for dynablock entry
-void log_dynablock_entry(void* native_addr, uintptr_t x64_addr) {
+void log_dynablock_entry(x64emu_t* emu, void* native_addr, uintptr_t x64_addr) {
+    (void)emu; // Unused, but needed for calling convention
     printf("[DYNABLOCK] %p -> x64:0x%lx\n", native_addr, x64_addr);
     fflush(stdout);
 }

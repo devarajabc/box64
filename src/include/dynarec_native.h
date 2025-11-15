@@ -12,6 +12,6 @@ void addInst(instsize_t* insts, size_t* size, int x64_size, int native_size);
 void CancelBlock64(int need_lock);
 dynablock_t* FillBlock64(uintptr_t addr, int alternate, int is32bits, int inst_max, int is_new);
 
-void log_dynablock_entry(void* native_addr, uintptr_t x64_addr);
+void log_dynablock_entry(x64emu_t* emu, void* native_addr, uintptr_t x64_addr);
 
 #endif //__DYNAREC_ARM_H_

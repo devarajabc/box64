@@ -99,6 +99,7 @@ typedef enum arm64_consts_s {
     const_2d_m1_1,
     const_4f_1_m1_1_m1,
     const_2d_1_m1,
+    const_log_dynablock_entry,
 
     const_last
 } arm64_consts_t;

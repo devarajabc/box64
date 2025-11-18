@@ -37,6 +37,22 @@ static int diagnose_sleeping_threads = 1;
 static FILE* diag_file = NULL;
 static uint64_t diag_sequence = 0;
 
+// ============= ENHANCED THREAD TRACKING =============
+static pthread_mutex_t tracking_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+#define MAX_TRACKED_BLOCKS 10000
+#define MAX_HOLDERS_PER_BLOCK 32
+
+typedef struct {
+    void* block_addr;
+    pid_t holder_tids[MAX_HOLDERS_PER_BLOCK];
+    int holder_count;
+    int active;  // 1 if entry is used
+} block_holder_record_t;
+
+static block_holder_record_t* block_holders = NULL;
+static int block_holders_initialized = 0;
+
 // Thread state detection helpers
 typedef enum {
     THREAD_UNKNOWN = 0,
@@ -74,6 +90,113 @@ static uint64_t get_timestamp_ms() {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+// ============= THREAD TRACKING FUNCTIONS =============
+
+// Initialize thread tracking system
+static void init_thread_tracking() {
+    if (block_holders_initialized) return;
+
+    block_holders = calloc(MAX_TRACKED_BLOCKS, sizeof(block_holder_record_t));
+    if (!block_holders) {
+        fprintf(stderr, "Failed to allocate thread tracking memory\n");
+        return;
+    }
+
+    block_holders_initialized = 1;
+    if (diag_file) {
+        fprintf(diag_file, "# Thread tracking initialized: %d max blocks\n", MAX_TRACKED_BLOCKS);
+        fflush(diag_file);
+    }
+}
+
+// Find or create a tracking record for a block
+static block_holder_record_t* find_holder_record(void* block_addr, int create) {
+    if (!block_holders_initialized) init_thread_tracking();
+    if (!block_holders) return NULL;
+
+    // First, try to find existing record
+    for (int i = 0; i < MAX_TRACKED_BLOCKS; i++) {
+        if (block_holders[i].active && block_holders[i].block_addr == block_addr) {
+            return &block_holders[i];
+        }
+    }
+
+    // If not found and create requested, find empty slot
+    if (create) {
+        for (int i = 0; i < MAX_TRACKED_BLOCKS; i++) {
+            if (!block_holders[i].active) {
+                block_holders[i].block_addr = block_addr;
+                block_holders[i].holder_count = 0;
+                block_holders[i].active = 1;
+                return &block_holders[i];
+            }
+        }
+    }
+
+    return NULL;
+}
+
+// Public API: Record that a thread acquired a block
+void track_block_acquired(void* block_addr, pid_t tid) {
+    if (!diagnose_sleeping_threads) return;
+
+    pthread_mutex_lock(&tracking_mutex);
+
+    block_holder_record_t* record = find_holder_record(block_addr, 1);
+    if (record && record->holder_count < MAX_HOLDERS_PER_BLOCK) {
+        // Check if already recorded (avoid duplicates)
+        for (int i = 0; i < record->holder_count; i++) {
+            if (record->holder_tids[i] == tid) {
+                pthread_mutex_unlock(&tracking_mutex);
+                return;
+            }
+        }
+        record->holder_tids[record->holder_count++] = tid;
+    }
+
+    pthread_mutex_unlock(&tracking_mutex);
+}
+
+// Public API: Record that a thread released a block
+void track_block_released(void* block_addr, pid_t tid) {
+    if (!diagnose_sleeping_threads) return;
+
+    pthread_mutex_lock(&tracking_mutex);
+
+    block_holder_record_t* record = find_holder_record(block_addr, 0);
+    if (record) {
+        // Remove tid from holders array
+        for (int i = 0; i < record->holder_count; i++) {
+            if (record->holder_tids[i] == tid) {
+                // Shift remaining elements
+                for (int j = i; j < record->holder_count - 1; j++) {
+                    record->holder_tids[j] = record->holder_tids[j + 1];
+                }
+                record->holder_count--;
+
+                // If no more holders, deactivate record
+                if (record->holder_count == 0) {
+                    record->active = 0;
+                }
+                break;
+            }
+        }
+    }
+
+    pthread_mutex_unlock(&tracking_mutex);
+}
+
+// Get holder information for a block
+static block_holder_record_t* get_block_holders(void* block_addr) {
+    if (!block_holders_initialized) return NULL;
+
+    pthread_mutex_lock(&tracking_mutex);
+    block_holder_record_t* record = find_holder_record(block_addr, 0);
+    pthread_mutex_unlock(&tracking_mutex);
+
+    return record;
 }
 
 // Check if a PC address is within a dynablock
@@ -170,6 +293,141 @@ static void analyze_block_holders(dynablock_t* block, int chunk_idx, int block_i
         printf("[PHANTOM] Block %p: hot=%u, in_used=%u, held by %d sleeping threads\n",
                block, block->hot, block->in_used, sleeping_holders);
     }
+}
+
+// ============= ENHANCED ANALYSIS WITH THREAD TRACKING =============
+
+// Analyze block with enhanced thread tracking
+static void analyze_block_with_thread_tracking(dynablock_t* block, int chunk_idx, int block_idx) {
+    if (!diagnose_sleeping_threads || !diag_file || !block) return;
+    if (block->in_used == 0) return;
+
+    uint64_t timestamp = get_timestamp_ms();
+
+    // Get tracking information
+    block_holder_record_t* record = get_block_holders(block->block);
+
+    if (record && record->holder_count > 0) {
+        // We have thread tracking data!
+        int sleeping_holders = 0;
+        int running_holders = 0;
+        int blocked_holders = 0;
+        int zombie_holders = 0;
+        int unknown_holders = 0;
+
+        // Check state of each tracked thread
+        for (int i = 0; i < record->holder_count; i++) {
+            pid_t tid = record->holder_tids[i];
+            thread_state_t state = get_thread_state(tid);
+
+            switch (state) {
+                case THREAD_RUNNING:  running_holders++; break;
+                case THREAD_SLEEPING: sleeping_holders++; break;
+                case THREAD_BLOCKED:  blocked_holders++; break;
+                case THREAD_ZOMBIE:   zombie_holders++; break;
+                default:              unknown_holders++; break;
+            }
+
+            // Log each holder
+            fprintf(diag_file, "DIAG_HOLDER,%lu,%lu,%p,tid=%d,state=%s\n",
+                    timestamp, diag_sequence++, block->block, tid,
+                    state == THREAD_RUNNING ? "RUNNING" :
+                    state == THREAD_SLEEPING ? "SLEEPING" :
+                    state == THREAD_BLOCKED ? "BLOCKED" :
+                    state == THREAD_ZOMBIE ? "ZOMBIE" : "UNKNOWN");
+        }
+
+        // Summary for this block
+        fprintf(diag_file, "DIAG_HOLDER_SUMMARY,%lu,%lu,%p,chunk=%d,idx=%d,in_used=%d,"
+                "tracked=%d,sleeping=%d,running=%d,blocked=%d,zombie=%d,unknown=%d\n",
+                timestamp, diag_sequence++, block->block, chunk_idx, block_idx,
+                block->in_used, record->holder_count,
+                sleeping_holders, running_holders, blocked_holders,
+                zombie_holders, unknown_holders);
+
+        // Special case: Block held ONLY by sleeping threads
+        if (sleeping_holders > 0 && running_holders == 0 && blocked_holders == 0) {
+            fprintf(diag_file, "DIAG_SLEEPING_ONLY_BLOCK,%lu,%lu,%p,hot=%d,in_used=%d,sleeping=%d\n",
+                    timestamp, diag_sequence++, block->block,
+                    block->hot, block->in_used, sleeping_holders);
+        }
+
+        // Special case: Block held by mix of sleeping and running
+        if (sleeping_holders > 0 && running_holders > 0) {
+            fprintf(diag_file, "DIAG_MIXED_BLOCK,%lu,%lu,%p,sleeping=%d,running=%d\n",
+                    timestamp, diag_sequence++, block->block,
+                    sleeping_holders, running_holders);
+        }
+
+    } else {
+        // No tracking data - in_used doesn't match tracked holders
+        fprintf(diag_file, "DIAG_UNTRACKED_BLOCK,%lu,%lu,%p,chunk=%d,idx=%d,in_used=%d\n",
+                timestamp, diag_sequence++, block->block, chunk_idx, block_idx,
+                block->in_used);
+    }
+
+    fflush(diag_file);
+}
+
+// Collect enhanced statistics with thread tracking
+static void collect_enhanced_purge_statistics(mmaplist_t* list, size_t requested_size) {
+    if (!diagnose_sleeping_threads || !diag_file) return;
+
+    uint64_t timestamp = get_timestamp_ms();
+
+    int total_blocks = 0;
+    int purgeable_blocks = 0;
+    int blocked_blocks = 0;
+    int sleeping_only_blocks = 0;  // Blocks held only by sleeping threads
+    int mixed_blocks = 0;           // Blocks held by sleeping + running
+    int running_only_blocks = 0;    // Blocks held only by running threads
+    int untracked_blocks = 0;       // Blocks with in_used but no tracking
+
+    // Scan all blocks
+    for (int chunk = 0; chunk < list->n_chunks; chunk++) {
+        mmapchunk_t* ch = &list->chunks[chunk];
+        for (int i = 0; i < ch->n_blocks; i++) {
+            dynablock_t* block = &ch->dynablock_map[i];
+            if (!block->block) continue;
+
+            total_blocks++;
+            int hot = native_lock_get_d(&block->hot);
+            int in_used = native_lock_get_d(&block->in_used);
+
+            if (hot == 1 && block->done && in_used == 0) {
+                purgeable_blocks++;
+            } else if (hot == 1 && block->done && in_used > 0) {
+                blocked_blocks++;
+
+                // Check tracking data
+                block_holder_record_t* record = get_block_holders(block->block);
+                if (record && record->holder_count > 0) {
+                    // Count sleeping vs running
+                    int sleeping = 0, running = 0;
+                    for (int j = 0; j < record->holder_count; j++) {
+                        thread_state_t state = get_thread_state(record->holder_tids[j]);
+                        if (state == THREAD_SLEEPING) sleeping++;
+                        else if (state == THREAD_RUNNING) running++;
+                    }
+
+                    if (sleeping > 0 && running == 0) sleeping_only_blocks++;
+                    else if (sleeping > 0 && running > 0) mixed_blocks++;
+                    else if (running > 0 && sleeping == 0) running_only_blocks++;
+                } else {
+                    untracked_blocks++;
+                }
+            }
+        }
+    }
+
+    // Log enhanced statistics
+    fprintf(diag_file, "DIAG_ENHANCED_STATS,%lu,%lu,total=%d,purgeable=%d,blocked=%d,"
+            "sleeping_only=%d,mixed=%d,running_only=%d,untracked=%d\n",
+            timestamp, diag_sequence++,
+            total_blocks, purgeable_blocks, blocked_blocks,
+            sleeping_only_blocks, mixed_blocks, running_only_blocks, untracked_blocks);
+
+    fflush(diag_file);
 }
 
 // Initialize diagnostics
@@ -1724,11 +1982,13 @@ static void collect_purge_statistics(mmaplist_t* list, size_t requested_size) {
                     total_blocks++;
                     total_memory += db->native_size;
 
-                    // Analyze this block
+                    // Analyze this block (old method)
                     analyze_block_holders(db, i, block_idx);
 
                     // Categorize
                     if (db->in_used > 0) {
+                        // Enhanced analysis with thread tracking
+                        analyze_block_with_thread_tracking(db, i, block_idx);
                         pinned_blocks++;
                         pinned_memory += db->native_size;
 
@@ -1773,7 +2033,12 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
     // return 1 as soon as one block has been deleted, 0 else
 
     init_sleeping_diagnostics();  // Initialize on first use
-    collect_purge_statistics(list, size);  // Collect diagnostic data
+    init_thread_tracking();  // Initialize thread tracking
+
+    // Collect both regular and enhanced statistics
+    collect_purge_statistics(list, size);
+    collect_enhanced_purge_statistics(list, size);
+
     // beware that hot=0 blocks means thay should not be touched
     int ret = 0;
     for(int i=0; i<list->size && !ret; ++i) {

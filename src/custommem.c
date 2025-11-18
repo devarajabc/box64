@@ -1859,6 +1859,9 @@ uintptr_t AllocDynarecMap(uintptr_t x64_addr, size_t size, int is_new)
 
     size = roundSize(size);
 
+    // Initialize diagnostics on first allocation
+    init_sleeping_diagnostics();
+
     // Log allocation attempt
     if (diagnose_sleeping_threads && diag_file) {
         fprintf(diag_file, "DIAG_ALLOC_REQUEST,%lu,%lu,%p,%zu\n",

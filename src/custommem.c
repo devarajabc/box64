@@ -369,76 +369,6 @@ static void analyze_block_with_thread_tracking(dynablock_t* block, int chunk_idx
     fflush(diag_file);
 }
 
-// Collect enhanced statistics with thread tracking
-static void collect_enhanced_purge_statistics(mmaplist_t* list, size_t requested_size) {
-    if (!diagnose_sleeping_threads || !diag_file) return;
-
-    uint64_t timestamp = get_timestamp_ms();
-
-    int total_blocks = 0;
-    int purgeable_blocks = 0;
-    int blocked_blocks = 0;
-    int sleeping_only_blocks = 0;  // Blocks held only by sleeping threads
-    int mixed_blocks = 0;           // Blocks held by sleeping + running
-    int running_only_blocks = 0;    // Blocks held only by running threads
-    int untracked_blocks = 0;       // Blocks with in_used but no tracking
-
-    // Scan all blocks - using same structure as collect_purge_statistics
-    for (int i = 0; i < list->size; i++) {
-        blocklist_t* bl = list->chunks[i];
-        if (!bl) continue;
-
-        blockmark_t* p = bl->block;
-        blockmark_t* end = bl->block + bl->size - sizeof(blockmark_t);
-
-        while (p < end) {
-            blockmark_t *n = NEXT_BLOCK(p);
-            if (p->next.fill) {
-                dynablock_t* db = *(dynablock_t**)p->mark;
-                if (db) {
-                    total_blocks++;
-                    int hot = native_lock_get_d(&db->hot);
-                    int in_used = native_lock_get_d(&db->in_used);
-
-                    if (hot == 1 && db->done && in_used == 0) {
-                        purgeable_blocks++;
-                    } else if (hot == 1 && db->done && in_used > 0) {
-                        blocked_blocks++;
-
-                        // Check tracking data
-                        block_holder_record_t* record = get_block_holders(db->block);
-                        if (record && record->holder_count > 0) {
-                            // Count sleeping vs running
-                            int sleeping = 0, running = 0;
-                            for (int j = 0; j < record->holder_count; j++) {
-                                thread_state_t state = get_thread_state(record->holder_tids[j]);
-                                if (state == THREAD_SLEEPING) sleeping++;
-                                else if (state == THREAD_RUNNING) running++;
-                            }
-
-                            if (sleeping > 0 && running == 0) sleeping_only_blocks++;
-                            else if (sleeping > 0 && running > 0) mixed_blocks++;
-                            else if (running > 0 && sleeping == 0) running_only_blocks++;
-                        } else {
-                            untracked_blocks++;
-                        }
-                    }
-                }
-            }
-            p = n;
-        }
-    }
-
-    // Log enhanced statistics
-    fprintf(diag_file, "DIAG_ENHANCED_STATS,%lu,%lu,total=%d,purgeable=%d,blocked=%d,"
-            "sleeping_only=%d,mixed=%d,running_only=%d,untracked=%d\n",
-            timestamp, diag_sequence++,
-            total_blocks, purgeable_blocks, blocked_blocks,
-            sleeping_only_blocks, mixed_blocks, running_only_blocks, untracked_blocks);
-
-    fflush(diag_file);
-}
-
 // Initialize diagnostics
 static void init_sleeping_diagnostics() {
     static int initialized = 0;
@@ -1974,6 +1904,12 @@ static void collect_purge_statistics(mmaplist_t* list, size_t requested_size) {
     size_t pinned_memory = 0;
     size_t purgeable_memory = 0;
 
+    // Enhanced statistics (thread tracking)
+    int sleeping_only_blocks = 0;
+    int mixed_blocks = 0;
+    int running_only_blocks = 0;
+    int untracked_blocks = 0;
+
     // Detailed per-block analysis
     for (int i = 0; i < list->size; i++) {
         blocklist_t* bl = list->chunks[i];
@@ -2004,6 +1940,25 @@ static void collect_purge_statistics(mmaplist_t* list, size_t requested_size) {
                         if (db->hot <= 1) {
                             phantom_candidates++;
                         }
+
+                        // Enhanced: Check if block held by sleeping vs running threads
+                        if (db->hot == 1 && db->done) {
+                            block_holder_record_t* record = get_block_holders(db->block);
+                            if (record && record->holder_count > 0) {
+                                int sleeping = 0, running = 0;
+                                for (int j = 0; j < record->holder_count; j++) {
+                                    thread_state_t state = get_thread_state(record->holder_tids[j]);
+                                    if (state == THREAD_SLEEPING) sleeping++;
+                                    else if (state == THREAD_RUNNING) running++;
+                                }
+
+                                if (sleeping > 0 && running == 0) sleeping_only_blocks++;
+                                else if (sleeping > 0 && running > 0) mixed_blocks++;
+                                else if (running > 0 && sleeping == 0) running_only_blocks++;
+                            } else {
+                                untracked_blocks++;
+                            }
+                        }
                     } else if (db->hot == 1 && db->done) {
                         purgeable_blocks++;
                         purgeable_memory += db->native_size;
@@ -2021,6 +1976,14 @@ static void collect_purge_statistics(mmaplist_t* list, size_t requested_size) {
 
     fprintf(diag_file, "DIAG_PURGE_MEMORY,%lu,%lu,total=%zu,pinned=%zu,purgeable=%zu\n",
             now, diag_sequence, total_memory, pinned_memory, purgeable_memory);
+
+    // Enhanced statistics with thread tracking
+    int blocked_blocks = pinned_blocks;  // All pinned blocks are blocked
+    fprintf(diag_file, "DIAG_ENHANCED_STATS,%lu,%lu,total=%d,purgeable=%d,blocked=%d,"
+            "sleeping_only=%d,mixed=%d,running_only=%d,untracked=%d\n",
+            now, diag_sequence,
+            total_blocks, purgeable_blocks, blocked_blocks,
+            sleeping_only_blocks, mixed_blocks, running_only_blocks, untracked_blocks);
 
     // Alert if phantom problem detected
     if (phantom_candidates > total_blocks * 0.5) {
@@ -2044,9 +2007,8 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
     init_sleeping_diagnostics();  // Initialize on first use
     init_thread_tracking();  // Initialize thread tracking
 
-    // Collect both regular and enhanced statistics
+    // Collect statistics (includes enhanced tracking)
     collect_purge_statistics(list, size);
-    collect_enhanced_purge_statistics(list, size);
 
     // beware that hot=0 blocks means thay should not be touched
     int ret = 0;

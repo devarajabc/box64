@@ -181,9 +181,9 @@ static void init_sleeping_diagnostics() {
     // Always enable diagnostics - no environment check needed
     diagnose_sleeping_threads = 1;
 
-    // Open diagnostic output file
+    // Open diagnostic output file in current directory
     char filename[256];
-    snprintf(filename, sizeof(filename), "/tmp/box64_sleeping_diag_%d.csv", getpid());
+    snprintf(filename, sizeof(filename), "box64_sleeping_diag_%d.csv", getpid());
     diag_file = fopen(filename, "w");
     if (diag_file) {
         // Write CSV header

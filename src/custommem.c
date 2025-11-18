@@ -32,8 +32,8 @@
 #include "dynarec/dynarec_next.h"
 
 // ============= SLEEPING THREAD DIAGNOSTICS =============
-// Enable with: export BOX64_DIAGNOSE_SLEEPING=1
-static int diagnose_sleeping_threads = 0;
+// Diagnostics enabled by default - no environment variables needed
+static int diagnose_sleeping_threads = 1;
 static FILE* diag_file = NULL;
 static uint64_t diag_sequence = 0;
 
@@ -87,7 +87,7 @@ static int is_pc_in_block(void* pc, dynablock_t* block) {
 
 // Analyze which threads are holding references to blocks
 static void analyze_block_holders(dynablock_t* block, int chunk_idx, int block_idx) {
-    if (!diagnose_sleeping_threads || !block) return;
+    if (!diagnose_sleeping_threads || !diag_file || !block) return;
     if (block->in_used == 0) return;  // No references, skip
 
     uint64_t now = get_timestamp_ms();
@@ -166,10 +166,9 @@ static void analyze_block_holders(dynablock_t* block, int chunk_idx, int block_i
         fprintf(diag_file, "DIAG_PHANTOM,%lu,%lu,%p,hot=%u,in_used=%u,sleeping=%d\n",
                 now, diag_sequence, block, block->hot, block->in_used, sleeping_holders);
 
-        if (getenv("BOX64_DIAGNOSE_VERBOSE")) {
-            printf("[PHANTOM] Block %p: hot=%u, in_used=%u, held by %d sleeping threads\n",
-                   block, block->hot, block->in_used, sleeping_holders);
-        }
+        // Always show phantom alerts to console
+        printf("[PHANTOM] Block %p: hot=%u, in_used=%u, held by %d sleeping threads\n",
+               block, block->hot, block->in_used, sleeping_holders);
     }
 }
 
@@ -179,23 +178,21 @@ static void init_sleeping_diagnostics() {
     if (initialized) return;
     initialized = 1;
 
-    char* env = getenv("BOX64_DIAGNOSE_SLEEPING");
-    if (env && env[0] == '1') {
-        diagnose_sleeping_threads = 1;
+    // Always enable diagnostics - no environment check needed
+    diagnose_sleeping_threads = 1;
 
-        // Open diagnostic output file
-        char filename[256];
-        snprintf(filename, sizeof(filename), "/tmp/box64_sleeping_diag_%d.csv", getpid());
-        diag_file = fopen(filename, "w");
-        if (diag_file) {
-            // Write CSV header
-            fprintf(diag_file, "# Box64 Sleeping Thread Diagnostic Log\n");
-            fprintf(diag_file, "# Started: %lu\n", get_timestamp_ms());
-            fprintf(diag_file, "# Format: TYPE,timestamp,sequence,data...\n");
-            fflush(diag_file);
+    // Open diagnostic output file
+    char filename[256];
+    snprintf(filename, sizeof(filename), "/tmp/box64_sleeping_diag_%d.csv", getpid());
+    diag_file = fopen(filename, "w");
+    if (diag_file) {
+        // Write CSV header
+        fprintf(diag_file, "# Box64 Sleeping Thread Diagnostic Log\n");
+        fprintf(diag_file, "# Started: %lu\n", get_timestamp_ms());
+        fprintf(diag_file, "# Format: TYPE,timestamp,sequence,data...\n");
+        fflush(diag_file);
 
-            printf("[BOX64] Sleeping thread diagnostics enabled, output: %s\n", filename);
-        }
+        printf("[BOX64] Sleeping thread diagnostics enabled, output: %s\n", filename);
     }
 }
 
@@ -1812,10 +1809,8 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
                             FreeDynablock(dynablock, 0, 1);
                             purged_count++;
 
-                            // Log successful purge to console if verbose
-                            if (getenv("BOX64_DIAGNOSE_VERBOSE")) {
-                                printf("[PURGED] Block %p (hot=%u)\n", dynablock, hot);
-                            }
+                            // Always log successful purge to console
+                            printf("[PURGED] Block %p (hot=%u)\n", dynablock, hot);
 
                             if((bl->maxfree>=size))
                                 ret = 1;

@@ -3,7 +3,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-
+#include <sys/syscall.h>
+#include <pthread.h>
+#include <time.h>
+#include <unistd.h>
+#include <dirent.h>
 #include "os.h"
 #include "backtrace.h"
 #include "box64context.h"
@@ -26,6 +30,185 @@
 #include "dynarec/dynablock_private.h"
 #include "dynarec/native_lock.h"
 #include "dynarec/dynarec_next.h"
+
+// ============= SLEEPING THREAD DIAGNOSTICS =============
+// Enable with: export BOX64_DIAGNOSE_SLEEPING=1
+static int diagnose_sleeping_threads = 0;
+static FILE* diag_file = NULL;
+static uint64_t diag_sequence = 0;
+
+// Thread state detection helpers
+typedef enum {
+    THREAD_UNKNOWN = 0,
+    THREAD_RUNNING,
+    THREAD_SLEEPING,
+    THREAD_BLOCKED,
+    THREAD_ZOMBIE
+} thread_state_t;
+
+// Get thread state from /proc
+static thread_state_t get_thread_state(pid_t tid) {
+    char path[256];
+    char state;
+    FILE* f;
+
+    snprintf(path, sizeof(path), "/proc/%d/stat", tid);
+    f = fopen(path, "r");
+    if (!f) return THREAD_UNKNOWN;
+
+    // Skip to state field (3rd field after command in parentheses)
+    fscanf(f, "%*d %*s %c", &state);
+    fclose(f);
+
+    switch(state) {
+        case 'R': return THREAD_RUNNING;
+        case 'S': return THREAD_SLEEPING;  // Interruptible sleep
+        case 'D': return THREAD_BLOCKED;   // Uninterruptible sleep (I/O)
+        case 'Z': return THREAD_ZOMBIE;
+        default: return THREAD_UNKNOWN;
+    }
+}
+
+// Get current timestamp in milliseconds
+static uint64_t get_timestamp_ms() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+// Check if a PC address is within a dynablock
+static int is_pc_in_block(void* pc, dynablock_t* block) {
+    if (!pc || !block || !block->block) return 0;
+    uintptr_t pc_addr = (uintptr_t)pc;
+    uintptr_t block_start = (uintptr_t)block->block;
+    uintptr_t block_end = block_start + block->native_size;
+    return (pc_addr >= block_start && pc_addr < block_end);
+}
+
+// Analyze which threads are holding references to blocks
+static void analyze_block_holders(dynablock_t* block, int chunk_idx, int block_idx) {
+    if (!diagnose_sleeping_threads || !block) return;
+    if (block->in_used == 0) return;  // No references, skip
+
+    uint64_t now = get_timestamp_ms();
+
+    // Get all thread IDs in this process
+    pid_t my_pid = getpid();
+    char path[256];
+    snprintf(path, sizeof(path), "/proc/%d/task", my_pid);
+
+    DIR* dir = opendir(path);
+    if (!dir) return;
+
+    struct dirent* entry;
+    int sleeping_holders = 0;
+    int running_holders = 0;
+    int blocked_holders = 0;
+
+    // CSV format for easy Python parsing:
+    // DIAG_BLOCK,timestamp,sequence,chunk_idx,block_idx,block_addr,hot,in_used,x64_addr,native_size
+    fprintf(diag_file, "DIAG_BLOCK,%lu,%lu,%d,%d,%p,%u,%u,%p,%zu\n",
+            now, diag_sequence, chunk_idx, block_idx, block,
+            block->hot, block->in_used, block->x64_addr, block->native_size);
+
+    // Check each thread
+    while ((entry = readdir(dir))) {
+        if (entry->d_name[0] == '.') continue;
+
+        pid_t tid = atoi(entry->d_name);
+        if (tid <= 0) continue;
+
+        thread_state_t state = get_thread_state(tid);
+
+        // Try to get thread's PC (this is platform specific)
+        // For demonstration, we'll check if thread might be in this block
+        // In real implementation, would need to read thread context
+
+        // Check if this thread might hold a reference
+        // (In actual implementation, would check thread's stack and PC)
+        int might_hold_ref = 1;  // Assume it might for diagnostic purposes
+
+        if (might_hold_ref) {
+            const char* state_str = "UNKNOWN";
+            switch(state) {
+                case THREAD_RUNNING:
+                    state_str = "RUNNING";
+                    running_holders++;
+                    break;
+                case THREAD_SLEEPING:
+                    state_str = "SLEEPING";
+                    sleeping_holders++;
+                    break;
+                case THREAD_BLOCKED:
+                    state_str = "BLOCKED";
+                    blocked_holders++;
+                    break;
+                case THREAD_ZOMBIE:
+                    state_str = "ZOMBIE";
+                    break;
+            }
+
+            // CSV format: DIAG_THREAD,timestamp,sequence,block_addr,tid,state
+            fprintf(diag_file, "DIAG_THREAD,%lu,%lu,%p,%d,%s\n",
+                    now, diag_sequence, block, tid, state_str);
+        }
+    }
+    closedir(dir);
+
+    // Summary line for this block
+    // DIAG_SUMMARY,timestamp,sequence,block_addr,sleeping,running,blocked,is_phantom
+    int is_phantom = (block->hot <= 1 && sleeping_holders > 0 && running_holders == 0);
+    fprintf(diag_file, "DIAG_SUMMARY,%lu,%lu,%p,%d,%d,%d,%d\n",
+            now, diag_sequence, block, sleeping_holders, running_holders, blocked_holders, is_phantom);
+
+    // Alert on phantom references
+    if (is_phantom) {
+        fprintf(diag_file, "DIAG_PHANTOM,%lu,%lu,%p,hot=%u,in_used=%u,sleeping=%d\n",
+                now, diag_sequence, block, block->hot, block->in_used, sleeping_holders);
+
+        if (getenv("BOX64_DIAGNOSE_VERBOSE")) {
+            printf("[PHANTOM] Block %p: hot=%u, in_used=%u, held by %d sleeping threads\n",
+                   block, block->hot, block->in_used, sleeping_holders);
+        }
+    }
+}
+
+// Initialize diagnostics
+static void init_sleeping_diagnostics() {
+    static int initialized = 0;
+    if (initialized) return;
+    initialized = 1;
+
+    char* env = getenv("BOX64_DIAGNOSE_SLEEPING");
+    if (env && env[0] == '1') {
+        diagnose_sleeping_threads = 1;
+
+        // Open diagnostic output file
+        char filename[256];
+        snprintf(filename, sizeof(filename), "/tmp/box64_sleeping_diag_%d.csv", getpid());
+        diag_file = fopen(filename, "w");
+        if (diag_file) {
+            // Write CSV header
+            fprintf(diag_file, "# Box64 Sleeping Thread Diagnostic Log\n");
+            fprintf(diag_file, "# Started: %lu\n", get_timestamp_ms());
+            fprintf(diag_file, "# Format: TYPE,timestamp,sequence,data...\n");
+            fflush(diag_file);
+
+            printf("[BOX64] Sleeping thread diagnostics enabled, output: %s\n", filename);
+        }
+    }
+}
+
+// Cleanup diagnostics
+static void cleanup_sleeping_diagnostics() {
+    if (diag_file) {
+        fprintf(diag_file, "# Ended: %lu\n", get_timestamp_ms());
+        fclose(diag_file);
+        diag_file = NULL;
+    }
+}
+
+// ============= END SLEEPING THREAD DIAGNOSTICS =============         
 
 // init inside dynablocks.c
 static mmaplist_t          *mmaplist = NULL;
@@ -1508,10 +1691,92 @@ dynablock_t* FindDynablockFromNativeAddress(void* p)
     return NULL;
 }
 
+// Comprehensive statistics for purge analysis
+static void collect_purge_statistics(mmaplist_t* list, size_t requested_size) {
+    if (!diagnose_sleeping_threads || !diag_file) return;
+
+    uint64_t now = get_timestamp_ms();
+    diag_sequence++;
+
+    // Start of purge attempt
+    fprintf(diag_file, "DIAG_PURGE_START,%lu,%lu,%zu\n", now, diag_sequence, requested_size);
+
+    // Statistics
+    int total_blocks = 0;
+    int pinned_blocks = 0;
+    int purgeable_blocks = 0;
+    int phantom_candidates = 0;
+    size_t total_memory = 0;
+    size_t pinned_memory = 0;
+    size_t purgeable_memory = 0;
+
+    // Detailed per-block analysis
+    for (int i = 0; i < list->size; i++) {
+        blocklist_t* bl = list->chunks[i];
+        if (!bl) continue;
+
+        blockmark_t* p = bl->block;
+        blockmark_t* end = bl->block + bl->size - sizeof(blockmark_t);
+
+        int block_idx = 0;
+        while (p < end) {
+            blockmark_t *n = NEXT_BLOCK(p);
+            if (p->next.fill) {
+                dynablock_t* db = *(dynablock_t**)p->mark;
+                if (db) {
+                    total_blocks++;
+                    total_memory += db->native_size;
+
+                    // Analyze this block
+                    analyze_block_holders(db, i, block_idx);
+
+                    // Categorize
+                    if (db->in_used > 0) {
+                        pinned_blocks++;
+                        pinned_memory += db->native_size;
+
+                        if (db->hot <= 1) {
+                            phantom_candidates++;
+                        }
+                    } else if (db->hot == 1 && db->done) {
+                        purgeable_blocks++;
+                        purgeable_memory += db->native_size;
+                    }
+                }
+                block_idx++;
+            }
+            p = n;
+        }
+    }
+
+    // Summary statistics
+    fprintf(diag_file, "DIAG_PURGE_STATS,%lu,%lu,total=%d,pinned=%d,purgeable=%d,phantoms=%d\n",
+            now, diag_sequence, total_blocks, pinned_blocks, purgeable_blocks, phantom_candidates);
+
+    fprintf(diag_file, "DIAG_PURGE_MEMORY,%lu,%lu,total=%zu,pinned=%zu,purgeable=%zu\n",
+            now, diag_sequence, total_memory, pinned_memory, purgeable_memory);
+
+    // Alert if phantom problem detected
+    if (phantom_candidates > total_blocks * 0.5) {
+        fprintf(diag_file, "DIAG_ALERT,%lu,%lu,PHANTOM_CRISIS,candidates=%d,percentage=%.1f\n",
+                now, diag_sequence, phantom_candidates,
+                100.0 * phantom_candidates / total_blocks);
+
+        printf("[PHANTOM CRISIS] %d/%d blocks (%.1f%%) are single-use but pinned!\n",
+               phantom_candidates, total_blocks,
+               100.0 * phantom_candidates / total_blocks);
+    }
+
+    fflush(diag_file);
+}
+
 int PurgeDynarecMap(mmaplist_t* list, size_t size)
 {
     // check all blocks where hot==1 and in_used==0 and delete them
     // return 1 as soon as one block has been deleted, 0 else
+
+    init_sleeping_diagnostics();  // Initialize on first use
+    collect_purge_statistics(list, size);  // Collect diagnostic data
     // beware that hot=0 blocks means thay should not be touched
     int ret = 0;
     for(int i=0; i<list->size && !ret; ++i) {
@@ -1519,6 +1784,7 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
         if(bl->nopurge) continue;
         blockmark_t* p = bl->block;
         blockmark_t* end = bl->block + bl->size - sizeof(blockmark_t);
+        int purged_count = 0;
 
         int purgeable = 0;
         while(p<end) {
@@ -1530,12 +1796,27 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
                     int in_used = native_lock_get_d(&dynablock->in_used);
                     if(!in_used) {
                         // free the block, but unreference it first
-                        //if(setJumpTableDefaultIfRef64(dynablock->x64_addr, dynablock->block)) 
+                        //if(setJumpTableDefaultIfRef64(dynablock->x64_addr, dynablock->block))
                         {
                             dynarec_log(LOG_INFO/*LOG_DEBUG*/, " PurgeDynablock %p\n", dynablock);
+
+                            // Log successful purge
+                            if (diagnose_sleeping_threads && diag_file) {
+                                fprintf(diag_file, "DIAG_PURGED,%lu,%lu,%p,hot=%u,size=%zu\n",
+                                        get_timestamp_ms(), diag_sequence, dynablock,
+                                        dynablock->hot, dynablock->native_size);
+                            }
+
                             if((n<end) && !n->next.fill )
                                 n = NEXT_BLOCK(n);  //because the block will be agglomerated
                             FreeDynablock(dynablock, 0, 1);
+                            purged_count++;
+
+                            // Log successful purge to console if verbose
+                            if (getenv("BOX64_DIAGNOSE_VERBOSE")) {
+                                printf("[PURGED] Block %p (hot=%u)\n", dynablock, hot);
+                            }
+
                             if((bl->maxfree>=size))
                                 ret = 1;
                         } // fail to set default jump, so skipping
@@ -1545,7 +1826,32 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
             p = n;
         }
         bl->nopurge = purgeable?0:1;
+
+        // Log chunk summary
+        if (diagnose_sleeping_threads && diag_file && purged_count > 0) {
+            fprintf(diag_file, "DIAG_CHUNK_PURGED,%lu,%lu,chunk=%d,count=%d\n",
+                    get_timestamp_ms(), diag_sequence, i, purged_count);
+        }
     }
+
+    // Log purge result
+    if (diagnose_sleeping_threads && diag_file) {
+        fprintf(diag_file, "DIAG_PURGE_END,%lu,%lu,success=%d\n",
+                get_timestamp_ms(), diag_sequence, ret);
+        fflush(diag_file);
+
+        // Alert if purge failed despite having phantom candidates
+        if (!ret) {
+            printf("[PURGE FAILED] Could not free %zu bytes despite phantom candidates\n", size);
+            fprintf(diag_file, "DIAG_ALERT,%lu,%lu,PURGE_FAILED,requested=%zu\n",
+                    get_timestamp_ms(), diag_sequence, size);
+        }
+    }
+
+    // Cleanup on exit
+    static int cleanup_registered = 0;
+    if (!cleanup_registered) { cleanup_registered = 1; atexit(cleanup_sleeping_diagnostics); }
+
     return ret;
 }
 #ifdef TRACE_MEMSTAT
@@ -1557,6 +1863,13 @@ uintptr_t AllocDynarecMap(uintptr_t x64_addr, size_t size, int is_new)
         return 0;
 
     size = roundSize(size);
+
+    // Log allocation attempt
+    if (diagnose_sleeping_threads && diag_file) {
+        fprintf(diag_file, "DIAG_ALLOC_REQUEST,%lu,%lu,%p,%zu\n",
+                get_timestamp_ms(), ++diag_sequence, (void*)x64_addr, size);
+        fflush(diag_file);
+    }
 
     mmaplist_t* list = GetMmaplistByAddr(x64_addr);
     if(!list)

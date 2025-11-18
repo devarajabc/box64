@@ -40,8 +40,8 @@ static uint64_t diag_sequence = 0;
 // ============= ENHANCED THREAD TRACKING =============
 static pthread_mutex_t tracking_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-#define MAX_TRACKED_BLOCKS 10000
-#define MAX_HOLDERS_PER_BLOCK 32
+#define MAX_TRACKED_BLOCKS 100000
+#define MAX_HOLDERS_PER_BLOCK 128
 
 typedef struct {
     void* block_addr;
@@ -383,40 +383,49 @@ static void collect_enhanced_purge_statistics(mmaplist_t* list, size_t requested
     int running_only_blocks = 0;    // Blocks held only by running threads
     int untracked_blocks = 0;       // Blocks with in_used but no tracking
 
-    // Scan all blocks
-    for (int chunk = 0; chunk < list->n_chunks; chunk++) {
-        mmapchunk_t* ch = &list->chunks[chunk];
-        for (int i = 0; i < ch->n_blocks; i++) {
-            dynablock_t* block = &ch->dynablock_map[i];
-            if (!block->block) continue;
+    // Scan all blocks - using same structure as collect_purge_statistics
+    for (int i = 0; i < list->size; i++) {
+        blocklist_t* bl = list->chunks[i];
+        if (!bl) continue;
 
-            total_blocks++;
-            int hot = native_lock_get_d(&block->hot);
-            int in_used = native_lock_get_d(&block->in_used);
+        blockmark_t* p = bl->block;
+        blockmark_t* end = bl->block + bl->size - sizeof(blockmark_t);
 
-            if (hot == 1 && block->done && in_used == 0) {
-                purgeable_blocks++;
-            } else if (hot == 1 && block->done && in_used > 0) {
-                blocked_blocks++;
+        while (p < end) {
+            blockmark_t *n = NEXT_BLOCK(p);
+            if (p->next.fill) {
+                dynablock_t* db = *(dynablock_t**)p->mark;
+                if (db) {
+                    total_blocks++;
+                    int hot = native_lock_get_d(&db->hot);
+                    int in_used = native_lock_get_d(&db->in_used);
 
-                // Check tracking data
-                block_holder_record_t* record = get_block_holders(block->block);
-                if (record && record->holder_count > 0) {
-                    // Count sleeping vs running
-                    int sleeping = 0, running = 0;
-                    for (int j = 0; j < record->holder_count; j++) {
-                        thread_state_t state = get_thread_state(record->holder_tids[j]);
-                        if (state == THREAD_SLEEPING) sleeping++;
-                        else if (state == THREAD_RUNNING) running++;
+                    if (hot == 1 && db->done && in_used == 0) {
+                        purgeable_blocks++;
+                    } else if (hot == 1 && db->done && in_used > 0) {
+                        blocked_blocks++;
+
+                        // Check tracking data
+                        block_holder_record_t* record = get_block_holders(db->block);
+                        if (record && record->holder_count > 0) {
+                            // Count sleeping vs running
+                            int sleeping = 0, running = 0;
+                            for (int j = 0; j < record->holder_count; j++) {
+                                thread_state_t state = get_thread_state(record->holder_tids[j]);
+                                if (state == THREAD_SLEEPING) sleeping++;
+                                else if (state == THREAD_RUNNING) running++;
+                            }
+
+                            if (sleeping > 0 && running == 0) sleeping_only_blocks++;
+                            else if (sleeping > 0 && running > 0) mixed_blocks++;
+                            else if (running > 0 && sleeping == 0) running_only_blocks++;
+                        } else {
+                            untracked_blocks++;
+                        }
                     }
-
-                    if (sleeping > 0 && running == 0) sleeping_only_blocks++;
-                    else if (sleeping > 0 && running > 0) mixed_blocks++;
-                    else if (running > 0 && sleeping == 0) running_only_blocks++;
-                } else {
-                    untracked_blocks++;
                 }
             }
+            p = n;
         }
     }
 

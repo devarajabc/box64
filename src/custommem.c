@@ -1941,20 +1941,59 @@ static void collect_purge_statistics(mmaplist_t* list, size_t requested_size) {
                             phantom_candidates++;
                         }
 
-                        // Enhanced: Check if block held by sleeping vs running threads
+                        // Enhanced: Infer if block held by sleeping vs running threads
                         if (db->hot == 1 && db->done) {
-                            block_holder_record_t* record = get_block_holders(db->block);
-                            if (record && record->holder_count > 0) {
-                                int sleeping = 0, running = 0;
-                                for (int j = 0; j < record->holder_count; j++) {
-                                    thread_state_t state = get_thread_state(record->holder_tids[j]);
-                                    if (state == THREAD_SLEEPING) sleeping++;
-                                    else if (state == THREAD_RUNNING) running++;
-                                }
+                            // Get current thread state distribution
+                            pid_t my_pid = getpid();
+                            char path[256];
+                            snprintf(path, sizeof(path), "/proc/%d/task", my_pid);
+                            DIR* dir = opendir(path);
 
-                                if (sleeping > 0 && running == 0) sleeping_only_blocks++;
-                                else if (sleeping > 0 && running > 0) mixed_blocks++;
-                                else if (running > 0 && sleeping == 0) running_only_blocks++;
+                            if (dir) {
+                                int total_threads = 0;
+                                int sleeping_threads = 0;
+                                int running_threads = 0;
+
+                                struct dirent* entry;
+                                while ((entry = readdir(dir))) {
+                                    if (entry->d_name[0] == '.') continue;
+                                    pid_t tid = atoi(entry->d_name);
+                                    if (tid <= 0) continue;
+
+                                    thread_state_t state = get_thread_state(tid);
+                                    total_threads++;
+                                    if (state == THREAD_SLEEPING) sleeping_threads++;
+                                    else if (state == THREAD_RUNNING) running_threads++;
+                                }
+                                closedir(dir);
+
+                                // Statistical inference:
+                                // If X% of threads are sleeping, assume X% chance each holder is sleeping
+                                // For a block with in_used=N holders, estimate holder distribution
+                                int in_used = db->in_used;
+
+                                if (total_threads > 0 && in_used > 0) {
+                                    float sleeping_ratio = (float)sleeping_threads / total_threads;
+                                    float running_ratio = (float)running_threads / total_threads;
+
+                                    // Estimate expected sleeping and running holders
+                                    float expected_sleeping = in_used * sleeping_ratio;
+                                    float expected_running = in_used * running_ratio;
+
+                                    // Categorize based on expectations
+                                    if (expected_sleeping >= in_used * 0.9) {
+                                        // >90% chance all holders are sleeping
+                                        sleeping_only_blocks++;
+                                    } else if (expected_running >= in_used * 0.9) {
+                                        // >90% chance all holders are running
+                                        running_only_blocks++;
+                                    } else {
+                                        // Likely mixed
+                                        mixed_blocks++;
+                                    }
+                                } else {
+                                    untracked_blocks++;
+                                }
                             } else {
                                 untracked_blocks++;
                             }

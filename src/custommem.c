@@ -1526,7 +1526,7 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
             if(p->next.fill) {
                 dynablock_t* dynablock = *(dynablock_t**)p->mark;
                 int tick = native_lock_get_d(&dynablock->tick);
-                if(tick && dynablock->done && my_context->tick>tick && ((my_context->tick-tick)<BOX64ENV(dynarec_purge_age))) {
+                if(tick && dynablock->done && my_context->tick>tick && ((my_context->tick-tick)>=BOX64ENV(dynarec_purge_age))) {
                     int in_used = native_lock_get_d(&dynablock->in_used);
                     if(!in_used) {
                         // free the block, but unreference it first

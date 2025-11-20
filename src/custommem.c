@@ -1525,8 +1525,8 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
             blockmark_t *n = NEXT_BLOCK(p);
             if(p->next.fill) {
                 dynablock_t* dynablock = *(dynablock_t**)p->mark;
-                int hot = native_lock_get_d(&dynablock->hot);
-                if(hot==1 && dynablock->done) {
+                int tick = native_lock_get_d(&dynablock->tick);
+                if(tick && dynablock->done && my_context->tick>tick && ((my_context->tick-tick)<BOX64ENV(dynarec_purge_age))) {
                     int in_used = native_lock_get_d(&dynablock->in_used);
                     if(!in_used) {
                         // free the block, but unreference it first
@@ -1540,11 +1540,11 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
                                 ret = 1;
                         } // fail to set default jump, so skipping
                     } else purgeable = 1;
-                } else if(hot<2) purgeable = 1;
+                }
             }
             p = n;
         }
-        bl->nopurge = purgeable?0:1;
+//        bl->nopurge = purgeable?0:1;
     }
     return ret;
 }
@@ -1557,6 +1557,8 @@ uintptr_t AllocDynarecMap(uintptr_t x64_addr, size_t size, int is_new)
         return 0;
 
     size = roundSize(size);
+
+    native_lock_store(&my_context->tick, my_context->tick+1);   // would be better with atomic inc...
 
     mmaplist_t* list = GetMmaplistByAddr(x64_addr);
     if(!list)

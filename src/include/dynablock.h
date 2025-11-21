@@ -7,6 +7,10 @@ typedef struct dynablock_s dynablock_t;
 uint32_t X31_hash_code(void* addr, int len);
 void FreeDynablock(dynablock_t* db, int need_lock, int need_remove);
 void MarkDynablock(dynablock_t* db);
+uint32_t get_purge_age(void);  // Get adaptive or default purge age
+uint32_t get_avg_recreation_delay(void);  // Get current average recreation delay
+void update_recreation_delay(uint32_t delay);  // Update EWMA with recreation delay
+void set_adaptive_age(uint32_t new_age);  // Set new adaptive threshold
 void MarkRangeDynablock(dynablock_t* db, uintptr_t addr, uintptr_t size);
 int FreeRangeDynablock(dynablock_t* db, uintptr_t addr, uintptr_t size);
 void FreeInvalidDynablock(dynablock_t* db, int need_lock);

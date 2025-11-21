@@ -93,6 +93,7 @@ typedef struct blocklist_s {
     size_t              size;
     void*               first;
     uint32_t            lowest;
+    uint32_t            oldest_block_tick;  // Track oldest (minimum tick) block in chunk for fast skip
     uint8_t             type;       // could use 6bits for type and 1bit for is32bits and nopurge
     uint8_t             is32bits;   // but that wont really change the size of structure anyway
     uint8_t             nopurge;    // set when block has no candidate for purge
@@ -1511,42 +1512,94 @@ dynablock_t* FindDynablockFromNativeAddress(void* p)
 
 int PurgeDynarecMap(mmaplist_t* list, size_t size)
 {
-    // check all blocks where hot==1 and in_used==0 and delete them
-    // return 1 as soon as one block has been deleted, 0 else
-    // beware that hot=0 blocks means thay should not be touched
+    uint32_t current_tick = my_context->tick;
+
+    // Per-chunk threshold based on ACTUAL age range
+    // Formula: threshold = max(max_age * keep_fraction, min_threshold)
+    // Where max_age = current_tick - oldest_block_tick (actual range, not theoretical)
+    //
+    // Blocks with age > threshold get purged
+
+    uint32_t min_threshold = BOX64ENV(dynarec_purge_age); 
+
+    // Keep fraction in Q8 fixed-point (scale = 256)
+    uint32_t keep_frac_q8;
+    if (current_tick < 20000) {
+        keep_frac_q8 = 128;       // 0.50 * 256 = 128, ~50% delete
+    } else if (current_tick < 50000) {
+        keep_frac_q8 = 154;       // 0.60 * 256 = 154, ~40% delete
+    } else if (current_tick < 100000) {
+        keep_frac_q8 = 179;       // 0.70 * 256 = 179, ~30% delete
+    } else if (current_tick < 200000) {
+        keep_frac_q8 = 192;       // 0.75 * 256 = 192, ~25% delete
+    } else {
+        keep_frac_q8 = 205;       // 0.80 * 256 = 205, ~20% delete
+    }
+
     int ret = 0;
+
     for(int i=0; i<list->size && !ret; ++i) {
         blocklist_t* bl = list->chunks[i];
         if(bl->nopurge) continue;
+
+        // Calculate per-chunk threshold based on ACTUAL age range
+        uint32_t purge_threshold;
+        if (bl->oldest_block_tick > 0 && current_tick > bl->oldest_block_tick) {
+            uint32_t max_age = current_tick - bl->oldest_block_tick;
+            purge_threshold = (max_age * keep_frac_q8) >> 8;
+            if (purge_threshold < min_threshold)
+                purge_threshold = min_threshold;
+        } else {
+            // No valid oldest_block_tick yet, use min_threshold
+            purge_threshold = min_threshold;
+        }
+
         blockmark_t* p = bl->block;
         blockmark_t* end = bl->block + bl->size - sizeof(blockmark_t);
+        uint32_t chunk_min_tick = UINT32_MAX;
 
-        int purgeable = 0;
         while(p<end) {
             blockmark_t *n = NEXT_BLOCK(p);
             if(p->next.fill) {
                 dynablock_t* dynablock = *(dynablock_t**)p->mark;
-                int hot = native_lock_get_d(&dynablock->hot);
-                if(hot==1 && dynablock->done) {
-                    int in_used = native_lock_get_d(&dynablock->in_used);
-                    if(!in_used) {
-                        // free the block, but unreference it first
-                        //if(setJumpTableDefaultIfRef64(dynablock->x64_addr, dynablock->block)) 
-                        {
-                            dynarec_log(LOG_INFO/*LOG_DEBUG*/, " PurgeDynablock %p\n", dynablock);
+                int tick = __atomic_load_n(&dynablock->tick, __ATOMIC_RELAXED);
+
+                if(tick > 0 && (uint32_t)tick < chunk_min_tick) {
+                    chunk_min_tick = tick;
+                }
+
+                if(tick && dynablock->done && current_tick > (uint32_t)tick) {
+                    uint32_t age = current_tick - (uint32_t)tick;
+
+                    if(age > purge_threshold) {
+                        int in_used = native_lock_get_d(&dynablock->in_used);
+                        if(!in_used) {
+                            printf_purge_log(LOG_INFO, "[PURGE SUCCESS] Purging old block %p (x64_addr=%p, last_used_tick=%d, current_age=%u, min_age_required=%u)\n",
+                                   dynablock, (void*)dynablock->x64_addr, tick, age, purge_threshold);
+
                             if((n<end) && !n->next.fill )
-                                n = NEXT_BLOCK(n);  //because the block will be agglomerated
+                                n = NEXT_BLOCK(n);
                             FreeDynablock(dynablock, 0, 1);
                             if((bl->maxfree>=size))
                                 ret = 1;
-                        } // fail to set default jump, so skipping
-                    } else purgeable = 1;
-                } else if(hot<2) purgeable = 1;
+                        } else {
+                            printf_purge_log(LOG_INFO, "[PURGE BLOCKED] Can't purge block %p (in_used=%d, last_used_tick=%d, current_age=%u, min_age_required=%u)\n",
+                                   dynablock, in_used, tick, age, purge_threshold);
+                        }
+                    } else {
+                        printf_purge_log(LOG_INFO, "[PURGE SKIP] Block too young %p (x64_addr=%p, last_used_tick=%d, current_age=%u, min_age_required=%u)\n",
+                               dynablock, (void*)dynablock->x64_addr, tick, age, purge_threshold);
+                    }
+                }
             }
             p = n;
         }
-        bl->nopurge = purgeable?0:1;
+
+        if (chunk_min_tick != UINT32_MAX) {
+            bl->oldest_block_tick = chunk_min_tick;
+        }
     }
+
     return ret;
 }
 #ifdef TRACE_MEMSTAT
@@ -1558,6 +1611,8 @@ uintptr_t AllocDynarecMap(uintptr_t x64_addr, size_t size, int is_new)
         return 0;
 
     size = roundSize(size);
+
+    native_lock_store(&my_context->tick, my_context->tick+1);
 
     mmaplist_t* list = GetMmaplistByAddr(x64_addr);
     if(!list)
@@ -1639,6 +1694,7 @@ uintptr_t AllocDynarecMap(uintptr_t x64_addr, size_t size, int is_new)
     list->chunks[i]->block = p;
     list->chunks[i]->first = p;
     list->chunks[i]->size = allocsize;
+    list->chunks[i]->oldest_block_tick = 0;  // Initialize - will be updated during first purge scan
     // setup marks
     blockmark_t* m = (blockmark_t*)p;
     m->prev.x32 = 0;

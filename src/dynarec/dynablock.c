@@ -26,6 +26,21 @@
 #include "khash.h"
 #include "rbtree.h"
 
+static uint32_t adaptive_age = 0;
+
+uint32_t get_purge_age(void) {
+    uint32_t age = __atomic_load_n(&adaptive_age, __ATOMIC_RELAXED);
+    return age ? age : BOX64ENV(dynarec_purge_age);
+}
+
+void set_adaptive_age(uint32_t new_age) {
+    uint32_t min_age = BOX64ENV(dynarec_purge_age);
+    if (new_age < min_age) new_age = min_age;
+    if (new_age > 65536) new_age = 65536;
+
+    __atomic_store_n(&adaptive_age, new_age, __ATOMIC_RELAXED);
+}
+
 uint32_t X31_hash_code(void* addr, int len)
 {
     if(!len) return 0;
@@ -138,6 +153,7 @@ void FreeDynablock(dynablock_t* db, int need_lock, int need_remove)
         dynarec_log(LOG_DEBUG, " -- FreeDyrecMap(%p, %d)\n", db->actual_block, db->size);
         db->done = 0;
         db->gone = 1;
+
         uintptr_t db_size = db->x64_size;
         if(db_size && my_context) {
             uint32_t n = rb_dec(my_context->db_sizes, db_size, db_size+1);
@@ -224,7 +240,6 @@ void cancelFillBlock()
 void dynablock_leave_runtime(dynablock_t* db)
 {
     if(!db) return;
-    if(!db->hot) return;
     __atomic_fetch_sub(&db->in_used, 1, __ATOMIC_ACQ_REL);
 }
 
@@ -296,6 +311,7 @@ static dynablock_t* internalDBGetBlock(x64emu_t* emu, uintptr_t addr, uintptr_t 
         pthread_sigmask(SIG_SETMASK, &old_sig, NULL);
         return NULL;
     }
+
     block = FillBlock64(filladdr, (addr==filladdr)?0:1, is32bits, MAX_INSTS, is_new);
     if(!block) {
         dynarec_log(LOG_DEBUG, "Fillblock of block %p for %p returned an error\n", block, (void*)addr);

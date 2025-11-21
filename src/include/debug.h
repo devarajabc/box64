@@ -47,6 +47,11 @@ extern int box64_tcmalloc_minimal;  // when using tcmalloc_minimal
 
 #define printf_log(L, ...) printf_log_prefix(1, L, __VA_ARGS__)
 
+#define printf_purge_log(L, ...)                                                             \
+    do {                                                                                     \
+        if ((L) <= BOX64ENV(purge_log)) { PrintfFtrace(1, __VA_ARGS__); }                    \
+    } while (0)
+
 #define printf_dump_prefix(prefix, L, ...)                                                   \
     do {                                                                                     \
         if (BOX64ENV(dump) || ((L) <= BOX64ENV(log))) { PrintfFtrace(prefix, __VA_ARGS__); } \

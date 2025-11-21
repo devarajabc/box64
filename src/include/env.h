@@ -76,6 +76,7 @@ extern char* ftrace_name;
     INTEGER(BOX64_DYNAREC_X87DOUBLE, dynarec_x87double, 0, 0, 2, 1)           \
     BOOLEAN(BOX64_DYNAREC_INTERP_SIGNAL, dynarec_interp_signal, 0, 0)         \
     BOOLEAN(BOX64_DYNAREC_PURGE, dynarec_purge, 0, 0)                         \
+    INTEGER(BOX64_DYNAREC_PURGE_AGE, dynarec_purge_age, 1024, 10, 0x10000, 0)  \
     BOOLEAN(BOX64_NODYNAREC_DELAY, nodynarec_delay, 0, 1)                     \
     STRING(BOX64_EMULATED_LIBS, emulated_libs, 0)                             \
     INTEGER(BOX64_DYNAREC_NOARCH, dynarec_noarch, 0, 0, 2, 1)                 \
@@ -97,6 +98,7 @@ extern char* ftrace_name;
     STRING(BOX64_LIBGL, libgl, 0)                                             \
     ADDRESS(BOX64_LOAD_ADDR, load_addr, 0)                                    \
     INTEGER(BOX64_LOG, log, DEFAULT_LOG_LEVEL, 0, 3, 1)                       \
+    INTEGER(BOX64_PURGE_LOG, purge_log, 0, 0, 3, 1)                           \
     INTEGER(BOX64_MALLOC_HACK, malloc_hack, 0, 0, 2, 0)                       \
     INTEGER(BOX64_MAXCPU, new_maxcpu, 0, 0, 100, 1)                           \
     BOOLEAN(BOX64_MMAP32, mmap32, 1, 0)                                       \

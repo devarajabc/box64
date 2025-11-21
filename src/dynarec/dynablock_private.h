@@ -28,6 +28,7 @@ typedef struct dynablock_s {
     uint8_t         dirty;      // if need to be tested as soon as it's created
     uint8_t         always_test:2;
     uint8_t         is32bits:1;
+    // Clock algorithm: LSB of tick is used as referenced bit
     int             callret_size;   // size of the array
     int             isize;
     size_t          arch_size;  // size of of arch dependant infos

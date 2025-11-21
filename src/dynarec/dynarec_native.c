@@ -729,6 +729,7 @@ dynablock_t* FillBlock64(uintptr_t addr, int alternate, int is32bits, int inst_m
     block->always_test = helper.always_test;
     block->dirty = block->always_test;
     block->is32bits = is32bits;
+    block->tick = 1;  // Set LSB to 1 for Clock algorithm (new blocks are referenced)
     block->relocsize = helper.reloc_size*sizeof(uint32_t);
     if(arch_size) {
         block->arch_size = arch_size;

@@ -1508,44 +1508,118 @@ dynablock_t* FindDynablockFromNativeAddress(void* p)
     return NULL;
 }
 
+// Clock algorithm globals
+static int clock_chunk_index = 0;
+static blockmark_t* clock_block_pos = NULL;
+
 int PurgeDynarecMap(mmaplist_t* list, size_t size)
 {
-    // check all blocks where hot==1 and in_used==0 and delete them
-    // return 1 as soon as one block has been deleted, 0 else
-    // beware that hot=0 blocks means thay should not be touched
+    // Clock algorithm: sweep through blocks giving second chances
     int ret = 0;
-    for(int i=0; i<list->size && !ret; ++i) {
-        blocklist_t* bl = list->chunks[i];
-        if(bl->nopurge) continue;
-        blockmark_t* p = bl->block;
-        blockmark_t* end = bl->block + bl->size - sizeof(blockmark_t);
+    int attempts = 0;
+    int max_attempts = list->size * 2;  // Allow two full rotations maximum
 
-        int purgeable = 0;
-        while(p<end) {
-            blockmark_t *n = NEXT_BLOCK(p);
-            if(p->next.fill) {
-                dynablock_t* dynablock = *(dynablock_t**)p->mark;
+    // Ensure we have a valid starting position
+    if (clock_chunk_index >= list->size) {
+        clock_chunk_index = 0;
+        clock_block_pos = NULL;
+    }
+
+    while (attempts < max_attempts && !ret) {
+        attempts++;
+
+        // Get current chunk
+        blocklist_t* bl = list->chunks[clock_chunk_index];
+        if (bl->nopurge) {
+            // Skip to next chunk
+            clock_chunk_index = (clock_chunk_index + 1) % list->size;
+            clock_block_pos = NULL;
+            continue;
+        }
+
+        // Initialize position in chunk if needed
+        if (!clock_block_pos || clock_block_pos < bl->block ||
+            clock_block_pos >= (blockmark_t*)((uintptr_t)bl->block + bl->size)) {
+            clock_block_pos = (blockmark_t*)bl->block;
+        }
+
+        blockmark_t* end = (blockmark_t*)((uintptr_t)bl->block + bl->size - sizeof(blockmark_t));
+        int chunk_done = 0;
+
+        // Process blocks in this chunk
+        while (clock_block_pos < end && !ret) {
+            blockmark_t *n = NEXT_BLOCK(clock_block_pos);
+
+            if (clock_block_pos->next.fill) {
+                dynablock_t* dynablock = *(dynablock_t**)clock_block_pos->mark;
                 int tick = native_lock_get_d(&dynablock->tick);
-                if(tick && dynablock->done && my_context->tick>tick && ((my_context->tick-tick)>=BOX64ENV(dynarec_purge_age))) {
-                    int in_used = native_lock_get_d(&dynablock->in_used);
-                    if(!in_used) {
-                        // free the block, but unreference it first
-                        //if(setJumpTableDefaultIfRef64(dynablock->x64_addr, dynablock->block)) 
-                        {
-                            dynarec_log(LOG_INFO/*LOG_DEBUG*/, " PurgeDynablock %p\n", dynablock);
-                            if((n<end) && !n->next.fill )
-                                n = NEXT_BLOCK(n);  //because the block will be agglomerated
-                            FreeDynablock(dynablock, 0, 1);
-                            if((bl->maxfree>=size))
-                                ret = 1;
-                        } // fail to set default jump, so skipping
-                    } else purgeable = 1;
+
+                // Check if block is eligible for purging
+                if (tick && dynablock->done) {
+                    // Extract actual tick value (clear LSB) and referenced bit
+                    uint32_t actual_tick = tick & ~1;
+                    int referenced = tick & 1;
+
+                    if (my_context->tick > actual_tick) {
+                        uint32_t age = my_context->tick - actual_tick;
+
+                        // Only consider blocks that meet minimum age requirement
+                        if (age >= BOX64ENV(dynarec_purge_age)) {
+                            int in_used = native_lock_get_d(&dynablock->in_used);
+
+                            if (!in_used) {
+                                // Check referenced bit (LSB of tick)
+                                if (referenced) {
+                                    // Second chance - clear referenced bit by clearing LSB
+                                    native_lock_store(&dynablock->tick, actual_tick);
+                                    dynarec_log(LOG_DEBUG, "Clock: Gave second chance to block %p (age=%u)\n",
+                                               dynablock, age);
+                                } else {
+                                    // Not referenced since last check - purge it
+                                    dynarec_log(LOG_INFO, "Clock: Purging unreferenced block %p (age=%u)\n",
+                                               dynablock, age);
+
+                                    // Handle block merging
+                                    if ((n < end) && !n->next.fill) {
+                                        n = NEXT_BLOCK(n);  // Block will be merged
+                                    }
+
+                                    FreeDynablock(dynablock, 0, 1);
+
+                                    // Check if we freed enough space
+                                    if (bl->maxfree >= size) {
+                                        ret = 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
-            p = n;
+
+            clock_block_pos = n;
+
+            // Check if we've reached the end of this chunk
+            if (clock_block_pos >= end) {
+                chunk_done = 1;
+                break;
+            }
         }
-//        bl->nopurge = purgeable?0:1;
+
+        // Move to next chunk if current is done
+        if (chunk_done || clock_block_pos >= end) {
+            clock_chunk_index = (clock_chunk_index + 1) % list->size;
+            clock_block_pos = NULL;
+        }
     }
+
+    // Log clock algorithm statistics
+    if (ret) {
+        dynarec_log(LOG_DEBUG, "Clock: Freed sufficient space after %d attempts\n", attempts);
+    } else {
+        dynarec_log(LOG_DEBUG, "Clock: Could not free sufficient space after %d attempts\n", attempts);
+    }
+
     return ret;
 }
 #ifdef TRACE_MEMSTAT
@@ -1558,7 +1632,7 @@ uintptr_t AllocDynarecMap(uintptr_t x64_addr, size_t size, int is_new)
 
     size = roundSize(size);
 
-    native_lock_store(&my_context->tick, my_context->tick+1);   // would be better with atomic inc...
+    native_lock_store(&my_context->tick, my_context->tick+2);   // increment by 2 to keep tick even (LSB reserved for Clock algorithm)
 
     mmaplist_t* list = GetMmaplistByAddr(x64_addr);
     if(!list)

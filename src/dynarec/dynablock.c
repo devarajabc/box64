@@ -129,6 +129,8 @@ void FreeDynablock(dynablock_t* db, int need_lock, int need_remove)
     if(db) {
         if(db->gone)
             return; // already in the process of deletion!
+        // Clear referenced bit (LSB) for Clock algorithm
+        db->tick = db->tick & ~1;
         dynarec_log(LOG_DEBUG, "FreeDynablock(%p), db->block=%p x64=%p:%p already gone=%d\n", db, db->block, db->x64_addr, db->x64_addr+db->x64_size-1, db->gone);
         // remove jumptable without waiting
         if(need_remove)
@@ -224,7 +226,8 @@ void cancelFillBlock()
 void dynablock_leave_runtime(dynablock_t* db)
 {
     if(!db) return;
-    if(!db->tick) return;
+    // Check if tick > 1 (has been executed with real tick, not just initialized)
+    if(db->tick <= 1) return;
     __atomic_fetch_sub(&db->in_used, 1, __ATOMIC_ACQ_REL);
 }
 

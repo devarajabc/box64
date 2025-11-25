@@ -26,21 +26,6 @@
 #include "khash.h"
 #include "rbtree.h"
 
-static uint32_t adaptive_age = 0;
-
-uint32_t get_purge_age(void) {
-    uint32_t age = __atomic_load_n(&adaptive_age, __ATOMIC_RELAXED);
-    return age ? age : BOX64ENV(dynarec_purge_age);
-}
-
-void set_adaptive_age(uint32_t new_age) {
-    uint32_t min_age = BOX64ENV(dynarec_purge_age);
-    if (new_age < min_age) new_age = min_age;
-    if (new_age > 65536) new_age = 65536;
-
-    __atomic_store_n(&adaptive_age, new_age, __ATOMIC_RELAXED);
-}
-
 uint32_t X31_hash_code(void* addr, int len)
 {
     if(!len) return 0;
@@ -240,6 +225,7 @@ void cancelFillBlock()
 void dynablock_leave_runtime(dynablock_t* db)
 {
     if(!db) return;
+    if(!db->tick) return;  // block was never entered, don't decrement in_used
     __atomic_fetch_sub(&db->in_used, 1, __ATOMIC_ACQ_REL);
 }
 

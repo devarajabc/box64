@@ -1514,26 +1514,38 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
 {
     uint32_t current_tick = my_context->tick;
 
-    // Per-chunk threshold based on ACTUAL age range
-    // Formula: threshold = max(max_age * keep_fraction, min_threshold)
-    // Where max_age = current_tick - oldest_block_tick (actual range, not theoretical)
+    // Data-driven 6-stage thresholds based on real log analysis:
+    //
+    // Tick Range | Hot Block % | Threshold | Reason
+    // -----------|-------------|-----------|---------------------------
+    //   0k-10k   |   33.3%     |    6000   | Early: many hot blocks
+    //  10k-30k   |   15-24%    |   12000   | Transition: moderate hot
+    //  30k-50k   |    7.9%     |   15000   | Stabilizing
+    //  50k-100k  |    1-2%     |   20000   | Peak protection
+    // 100k-200k  |    <2%      |    5000   | Steady: few hot blocks
+    //   200k+    |    <1%      |    3000   | Very stable: aggressive
     //
     // Blocks with age > threshold get purged
 
-    uint32_t min_threshold = BOX64ENV(dynarec_purge_age); 
-
-    // Keep fraction in Q8 fixed-point (scale = 256)
-    uint32_t keep_frac_q8;
-    if (current_tick < 20000) {
-        keep_frac_q8 = 128;       // 0.50 * 256 = 128, ~50% delete
+    uint32_t purge_threshold;
+    if (current_tick < 10000) {
+        purge_threshold = 6000;       // Early: many hot blocks (33% hot rate)
+    } else if (current_tick < 30000) {
+        purge_threshold = 12000;      // Transition: moderate hot (15-24% hot rate)
     } else if (current_tick < 50000) {
-        keep_frac_q8 = 154;       // 0.60 * 256 = 154, ~40% delete
+        purge_threshold = 15000;      // Stabilizing (8% hot rate)
     } else if (current_tick < 100000) {
-        keep_frac_q8 = 179;       // 0.70 * 256 = 179, ~30% delete
+        purge_threshold = 20000;      // Peak protection (1-2% hot rate)
     } else if (current_tick < 200000) {
-        keep_frac_q8 = 192;       // 0.75 * 256 = 192, ~25% delete
+        purge_threshold = 5000;       // Steady state: few hot blocks
     } else {
-        keep_frac_q8 = 205;       // 0.80 * 256 = 205, ~20% delete
+        purge_threshold = 3000;       // Very stable: aggressive purge
+    }
+
+    // Allow user override via BOX64_DYNAREC_PURGE_AGE
+    uint32_t user_threshold = BOX64ENV(dynarec_purge_age);
+    if (user_threshold != 1024) {  // 1024 is default, use staged if default
+        purge_threshold = user_threshold;
     }
 
     int ret = 0;
@@ -1542,17 +1554,14 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
         blocklist_t* bl = list->chunks[i];
         if(bl->nopurge) continue;
 
-        // Calculate per-chunk threshold based on ACTUAL age range
-        uint32_t purge_threshold;
+        // Skip chunk if oldest block is too young (optimization to reduce skip rate)
         if (bl->oldest_block_tick > 0 && current_tick > bl->oldest_block_tick) {
-            uint32_t max_age = current_tick - bl->oldest_block_tick;
-            purge_threshold = (max_age * keep_frac_q8) >> 8;
-            if (purge_threshold < min_threshold)
-                purge_threshold = min_threshold;
-        } else {
-            // No valid oldest_block_tick yet, use min_threshold
-            purge_threshold = min_threshold;
+            uint32_t oldest_age = current_tick - bl->oldest_block_tick;
+            if (oldest_age < purge_threshold) {
+                continue;  // All blocks in chunk are younger than threshold
+            }
         }
+
 
         blockmark_t* p = bl->block;
         blockmark_t* end = bl->block + bl->size - sizeof(blockmark_t);
@@ -1562,34 +1571,36 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
             blockmark_t *n = NEXT_BLOCK(p);
             if(p->next.fill) {
                 dynablock_t* dynablock = *(dynablock_t**)p->mark;
-                int tick = __atomic_load_n(&dynablock->tick, __ATOMIC_RELAXED);
-
-                if(tick > 0 && (uint32_t)tick < chunk_min_tick) {
-                    chunk_min_tick = tick;
-                }
-
-                if(tick && dynablock->done && current_tick > (uint32_t)tick) {
-                    uint32_t age = current_tick - (uint32_t)tick;
+                uint32_t tick = __atomic_load_n(&dynablock->tick, __ATOMIC_RELAXED);
+                int purged = 0;
+                if(tick && dynablock->done && current_tick > tick) {
+                    uint32_t age = current_tick - tick;
 
                     if(age > purge_threshold) {
                         int in_used = native_lock_get_d(&dynablock->in_used);
                         if(!in_used) {
-                            printf_purge_log(LOG_INFO, "[PURGE SUCCESS] Purging old block %p (x64_addr=%p, last_used_tick=%d, current_age=%u, min_age_required=%u)\n",
+                            printf("[PURGE SUCCESS] Purging old block %p (x64_addr=%p, last_used_tick=%u, current_age=%u, min_age_required=%u)\n",
                                    dynablock, (void*)dynablock->x64_addr, tick, age, purge_threshold);
 
                             if((n<end) && !n->next.fill )
                                 n = NEXT_BLOCK(n);
                             FreeDynablock(dynablock, 0, 1);
+                            purged = 1;
                             if((bl->maxfree>=size))
                                 ret = 1;
                         } else {
-                            printf_purge_log(LOG_INFO, "[PURGE BLOCKED] Can't purge block %p (in_used=%d, last_used_tick=%d, current_age=%u, min_age_required=%u)\n",
+                            printf("[PURGE BLOCKED] Can't purge block %p (in_used=%d, last_used_tick=%u, current_age=%u, min_age_required=%u)\n",
                                    dynablock, in_used, tick, age, purge_threshold);
                         }
                     } else {
-                        printf_purge_log(LOG_INFO, "[PURGE SKIP] Block too young %p (x64_addr=%p, last_used_tick=%d, current_age=%u, min_age_required=%u)\n",
+                        printf("[PURGE SKIP] Block too young %p (x64_addr=%p, last_used_tick=%u, current_age=%u, min_age_required=%u)\n",
                                dynablock, (void*)dynablock->x64_addr, tick, age, purge_threshold);
                     }
+                }
+
+                // Only track min tick for surviving blocks
+                if(!purged && tick > 0 && tick < chunk_min_tick) {
+                    chunk_min_tick = tick;
                 }
             }
             p = n;

@@ -1548,6 +1548,12 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
         purge_threshold = user_threshold;
     }
 
+    // Early exit: if current_tick < threshold, no blocks can possibly be old enough
+    // This eliminates unnecessary scanning during early phase
+    if (current_tick < purge_threshold) {
+        return 0;
+    }
+
     int ret = 0;
 
     for(int i=0; i<list->size && !ret; ++i) {
@@ -1555,6 +1561,7 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
         if(bl->nopurge) continue;
 
         // Skip chunk if oldest block is too young (optimization to reduce skip rate)
+        // If oldest_block_tick is 0 (uninitialized), we need to scan to initialize it
         if (bl->oldest_block_tick > 0 && current_tick > bl->oldest_block_tick) {
             uint32_t oldest_age = current_tick - bl->oldest_block_tick;
             if (oldest_age < purge_threshold) {
@@ -1708,7 +1715,7 @@ uintptr_t AllocDynarecMap(uintptr_t x64_addr, size_t size, int is_new)
     list->chunks[i]->block = p;
     list->chunks[i]->first = p;
     list->chunks[i]->size = allocsize;
-    list->chunks[i]->oldest_block_tick = 0;  // Initialize - will be updated during first purge scan
+    list->chunks[i]->oldest_block_tick = my_context->tick;  // Initialize to current tick
     // setup marks
     blockmark_t* m = (blockmark_t*)p;
     m->prev.x32 = 0;

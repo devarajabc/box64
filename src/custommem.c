@@ -1514,32 +1514,33 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
 {
     uint32_t current_tick = my_context->tick;
 
-    // Data-driven 6-stage thresholds based on real log analysis:
+    // AGGRESSIVE 6-stage thresholds - prioritize memory savings over recreation
     //
-    // Tick Range | Hot Block % | Threshold | Reason
-    // -----------|-------------|-----------|---------------------------
-    //   0k-10k   |   33.3%     |    6000   | Early: many hot blocks
-    //  10k-30k   |   15-24%    |   12000   | Transition: moderate hot
-    //  30k-50k   |    7.9%     |   15000   | Stabilizing
-    //  50k-100k  |    1-2%     |   20000   | Peak protection
-    // 100k-200k  |    <2%      |    5000   | Steady: few hot blocks
-    //   200k+    |    <1%      |    3000   | Very stable: aggressive
+    // Tick Range | Threshold | Strategy
+    // -----------|-----------|---------------------------
+    //   0k-10k   |    1500   | Aggressive even early
+    //  10k-30k   |    2500   | Quick transition
+    //  30k-50k   |    3000   | Moderate protection
+    //  50k-100k  |    4000   | Brief peak protection
+    // 100k-200k  |    1500   | Back to aggressive
+    //   200k+    |    1000   | Very aggressive steady state
     //
-    // Blocks with age > threshold get purged
+    // Lower thresholds = more blocks purged = higher memory savings
+    // Trade-off: may increase churn rate slightly
 
     uint32_t purge_threshold;
     if (current_tick < 10000) {
-        purge_threshold = 6000;       // Early: many hot blocks (33% hot rate)
+        purge_threshold = 1500;       // Aggressive early purge
     } else if (current_tick < 30000) {
-        purge_threshold = 12000;      // Transition: moderate hot (15-24% hot rate)
+        purge_threshold = 2500;       // Quick ramp-up
     } else if (current_tick < 50000) {
-        purge_threshold = 15000;      // Stabilizing (8% hot rate)
+        purge_threshold = 3000;       // Moderate protection
     } else if (current_tick < 100000) {
-        purge_threshold = 20000;      // Peak protection (1-2% hot rate)
+        purge_threshold = 4000;       // Brief peak protection
     } else if (current_tick < 200000) {
-        purge_threshold = 5000;       // Steady state: few hot blocks
+        purge_threshold = 1500;       // Back to aggressive
     } else {
-        purge_threshold = 3000;       // Very stable: aggressive purge
+        purge_threshold = 1000;       // Very aggressive steady state
     }
 
     // Allow user override via BOX64_DYNAREC_PURGE_AGE
@@ -1561,8 +1562,7 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
         if(bl->nopurge) continue;
 
         // Skip chunk if oldest block is too young (optimization to reduce skip rate)
-        // If oldest_block_tick is 0 (uninitialized), we need to scan to initialize it
-        if (bl->oldest_block_tick > 0 && current_tick > bl->oldest_block_tick) {
+        if (bl->oldest_block_tick > 0 && current_tick >= bl->oldest_block_tick) {
             uint32_t oldest_age = current_tick - bl->oldest_block_tick;
             if (oldest_age < purge_threshold) {
                 continue;  // All blocks in chunk are younger than threshold

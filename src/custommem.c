@@ -1581,6 +1581,7 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
                         if(!in_used) {
                             printf("[PURGE SUCCESS] Purging old block %p (x64_addr=%p, last_used_tick=%u, current_age=%u, min_age_required=%u)\n",
                                    dynablock, (void*)dynablock->x64_addr, tick, age, purge_threshold);
+                            fflush(stdout);
 
                             if((n<end) && !n->next.fill )
                                 n = NEXT_BLOCK(n);
@@ -1591,10 +1592,12 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
                         } else {
                             printf("[PURGE BLOCKED] Can't purge block %p (in_used=%d, last_used_tick=%u, current_age=%u, min_age_required=%u)\n",
                                    dynablock, in_used, tick, age, purge_threshold);
+                            fflush(stdout);
                         }
                     } else {
                         printf("[PURGE SKIP] Block too young %p (x64_addr=%p, last_used_tick=%u, current_age=%u, min_age_required=%u)\n",
                                dynablock, (void*)dynablock->x64_addr, tick, age, purge_threshold);
+                        fflush(stdout);
                     }
                 }
 

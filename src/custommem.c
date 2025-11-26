@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <errno.h>
 #include <stdarg.h>
 #include <unistd.h>
@@ -86,6 +87,11 @@ static void openPurgeLog(void)
     const char* p = BOX64ENV(dynarec_purge_file);
     if(!p || !strlen(p)) {
         return;  // no file specified, logging disabled
+    }
+
+    // If set to "1" or "true", use default filename
+    if(!strcmp(p, "1") || !strcasecmp(p, "true")) {
+        p = "/tmp/box64_purge_%pid.log";
     }
 
     char tmp[4096];

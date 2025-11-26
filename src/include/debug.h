@@ -75,6 +75,10 @@ extern int box64_tcmalloc_minimal;  // when using tcmalloc_minimal
 
 #define dynarec_log(L, ...) dynarec_log_prefix(1, L, __VA_ARGS__)
 
+// Purge logging - writes to file specified by BOX64_DYNAREC_PURGE_FILE (disabled if not set)
+void PrintfPurgeLog(const char* fmt, ...);
+#define printf_purge_log(...) PrintfPurgeLog(__VA_ARGS__)
+
 
 #define EXPORT __attribute__((visibility("default")))
 #ifdef BUILD_DYNAMIC

@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <stdarg.h>
+#include <unistd.h>
 
 #include "os.h"
 #include "backtrace.h"
@@ -69,6 +71,80 @@ pthread_mutex_t     mutex_blocks;
 //#define TRACE_MEMSTAT
 rbtree_t* memprot = NULL;
 int have48bits = 0;
+
+// Purge log file handling
+static FILE* fpurge = NULL;
+static char* fpurge_name = NULL;
+static int fpurge_fd = -1;
+static int fpurge_initialized = 0;
+
+static void openPurgeLog(void)
+{
+    if(fpurge_initialized) return;  // already initialized
+    fpurge_initialized = 1;
+
+    const char* p = BOX64ENV(dynarec_purge_file);
+    if(!p || !strlen(p)) {
+        return;  // no file specified, logging disabled
+    }
+
+    char tmp[4096];
+    // Support %pid in filename
+    if(strstr(p, "%pid")) {
+        strcpy(tmp, p);
+        char* c = strstr(tmp, "%pid");
+        *c = 0;
+        char pid[16];
+        sprintf(pid, "%d", getpid());
+        strcat(tmp, pid);
+        c = strstr(p, "%pid") + 4;
+        strcat(tmp, c);
+        p = tmp;
+    }
+
+    fpurge = fopen(p, "w");
+    if(!fpurge) {
+        fprintf(stderr, "[BOX64] Cannot open purge log file \"%s\" for writing (error=%s)\n", p, strerror(errno));
+    } else {
+        fpurge_name = strdup(p);
+        fpurge_fd = fileno(fpurge);
+        fprintf(stderr, "[BOX64] Purge log redirected to \"%s\"\n", p);
+        // Write header
+        fprintf(fpurge, "# Box64 Dynarec Purge Log\n");
+        fprintf(fpurge, "# Format: [EVENT_TYPE] details...\n");
+        fprintf(fpurge, "# EVENT_TYPE: PURGE SUCCESS, PURGE BLOCKED, PURGE SKIP\n\n");
+        fflush(fpurge);
+    }
+}
+
+void PrintfPurgeLog(const char* fmt, ...)
+{
+    if(!fpurge_initialized) openPurgeLog();
+    if(!fpurge) return;  // logging disabled
+
+    char tmp[4096];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(tmp, sizeof(tmp), fmt, args);
+    va_end(args);
+
+    write(fpurge_fd, tmp, strlen(tmp));
+}
+
+void ClosePurgeLog(void)
+{
+    if(fpurge && fpurge != stderr && fpurge != stdout) {
+        fclose(fpurge);
+    }
+    fpurge = NULL;
+    if(fpurge_name) {
+        free(fpurge_name);
+        fpurge_name = NULL;
+    }
+    fpurge_fd = -1;
+    fpurge_initialized = 0;
+}
+
 static int inited = 0;
 typedef enum {
     MEM_UNUSED = 0,
@@ -1526,21 +1602,33 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
             blockmark_t *n = NEXT_BLOCK(p);
             if(p->next.fill) {
                 dynablock_t* dynablock = *(dynablock_t**)p->mark;
-                int tick = native_lock_get_d(&dynablock->tick);
-                if(tick && dynablock->done && my_context->tick>tick && ((my_context->tick-tick)>BOX64ENV(dynarec_purge_age))) {
+                uint32_t tick = native_lock_get_d(&dynablock->tick);
+                uint32_t purge_threshold = BOX64ENV(dynarec_purge_age);
+                uint32_t current_tick = my_context->tick;
+                uint32_t age = (tick && current_tick > tick) ? (current_tick - tick) : 0;
+                if(tick && dynablock->done && current_tick>tick && (age>purge_threshold)) {
                     int in_used = native_lock_get_d(&dynablock->in_used);
                     if(!in_used) {
                         // free the block, but unreference it first
-                        //if(setJumpTableDefaultIfRef64(dynablock->x64_addr, dynablock->block)) 
+                        //if(setJumpTableDefaultIfRef64(dynablock->x64_addr, dynablock->block))
                         {
-                            dynarec_log(LOG_INFO/*LOG_DEBUG*/, " PurgeDynablock %p\n", dynablock);
+                            printf_purge_log("[PURGE SUCCESS] Purging old block %p (x64_addr=%p, last_used_tick=%u, current_age=%u, min_age_required=%u)\n",
+                                dynablock, (void*)dynablock->x64_addr, tick, age, purge_threshold);
                             if((n<end) && !n->next.fill )
                                 n = NEXT_BLOCK(n);  //because the block will be agglomerated
                             FreeDynablock(dynablock, 0, 1);
                             if((bl->maxfree>=size))
                                 ret = 1;
                         } // fail to set default jump, so skipping
-                    } else purgeable = 1;
+                    } else {
+                        printf_purge_log("[PURGE BLOCKED] Can't purge block %p (in_used=%d, last_used_tick=%u, current_age=%u, min_age_required=%u)\n",
+                            dynablock, in_used, tick, age, purge_threshold);
+                        purgeable = 1;
+                    }
+                } else if(tick && dynablock->done) {
+                    int in_used_skip = native_lock_get_d(&dynablock->in_used);
+                    printf_purge_log("[PURGE SKIP] Block too young %p (x64_addr=%p, in_used=%d, last_used_tick=%u, current_age=%u, min_age_required=%u)\n",
+                        dynablock, (void*)dynablock->x64_addr, in_used_skip, tick, age, purge_threshold);
                 }
             }
             p = n;

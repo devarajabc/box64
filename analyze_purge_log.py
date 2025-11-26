@@ -207,30 +207,265 @@ def analyze_events(events):
     print(f"X64 addresses only blocked (always in use):         {len(only_blocked):,}")
     print()
 
-def timeline_analysis(events, window_size=1000):
-    """Analyze purging behavior over time"""
+def age_recreation_analysis(events):
+    """Analyze recreation rate by age at purge time"""
 
-    if len(events) < window_size:
-        print(f"Not enough events for timeline analysis (need at least {window_size})")
+    print("=" * 90)
+    print("AGE AT PURGE → RECREATION RATE")
+    print("=" * 90)
+
+    # For each SUCCESS, record x64_addr and age
+    # Then check if that x64_addr appears later as SKIP
+    purge_records = []  # list of (x64_addr, age, event_index)
+
+    for idx, e in enumerate(events):
+        if e['type'] == 'SUCCESS':
+            purge_records.append({
+                'x64_addr': e['x64_addr'],
+                'age': e['current_age'],
+                'idx': idx
+            })
+
+    # For each purged address, check if it appears as SKIP later
+    # Build a map of x64_addr -> list of SKIP event indices
+    skip_indices = {}
+    for idx, e in enumerate(events):
+        if e['type'] == 'SKIP':
+            x64 = e['x64_addr']
+            if x64 not in skip_indices:
+                skip_indices[x64] = []
+            skip_indices[x64].append(idx)
+
+    # Check recreation for each purge
+    for rec in purge_records:
+        x64 = rec['x64_addr']
+        purge_idx = rec['idx']
+        # Was this x64 seen as SKIP after the purge?
+        rec['recreated'] = False
+        if x64 in skip_indices:
+            for skip_idx in skip_indices[x64]:
+                if skip_idx > purge_idx:
+                    rec['recreated'] = True
+                    break
+
+    if not purge_records:
+        print("No SUCCESS events found.")
+        print()
         return
 
-    print("=" * 70)
-    print(f"TIMELINE ANALYSIS (window size: {window_size})")
-    print("=" * 70)
+    # Group by age ranges
+    age_ranges = [
+        (0, 1024, "0-1K"),
+        (1024, 2048, "1K-2K"),
+        (2048, 4096, "2K-4K"),
+        (4096, 8192, "4K-8K"),
+        (8192, 16384, "8K-16K"),
+        (16384, 32768, "16K-32K"),
+        (32768, 65536, "32K-64K"),
+        (65536, 131072, "64K-128K"),
+        (131072, float('inf'), "128K+")
+    ]
 
-    print(f"{'Window':>10} | {'Total':>8} | {'Success':>8} | {'Blocked':>8} | {'Skip':>8} | {'S-Rate':>7}")
-    print("-" * 70)
+    print(f"Total purged blocks (SUCCESS events): {len(purge_records):,}")
+    print()
+    print(f"{'Age Range':>12} | {'Purged':>10} | {'Recreated':>10} | {'Recreation %':>13} | Bar")
+    print("-" * 80)
 
-    step = window_size // 2
-    for i in range(0, len(events) - window_size + 1, step):
-        window = events[i:i+window_size]
+    total_purged = 0
+    total_recreated = 0
+
+    for low, high, label in age_ranges:
+        in_range = [r for r in purge_records if low <= r['age'] < high]
+        purged = len(in_range)
+        recreated = sum(1 for r in in_range if r['recreated'])
+
+        if purged > 0:
+            rate = 100 * recreated / purged
+            bar_len = int(rate / 2)  # 50 chars = 100%
+            bar = '#' * bar_len + '.' * (50 - bar_len)
+            print(f"{label:>12} | {purged:>10,} | {recreated:>10,} | {rate:>12.1f}% | {bar}")
+            total_purged += purged
+            total_recreated += recreated
+
+    print("-" * 80)
+    overall_rate = 100 * total_recreated / total_purged if total_purged > 0 else 0
+    print(f"{'TOTAL':>12} | {total_purged:>10,} | {total_recreated:>10,} | {overall_rate:>12.1f}%")
+    print()
+
+    # Interpretation
+    print("Interpretation:")
+    print("  - High recreation % at low ages = threshold too aggressive (purging too soon)")
+    print("  - Low recreation % at high ages = those blocks are safe to purge")
+    print()
+
+    # Find optimal threshold suggestion
+    print("Threshold recommendation:")
+    recommended = None
+    for low, high, label in age_ranges:
+        in_range = [r for r in purge_records if low <= r['age'] < high]
+        if len(in_range) >= 10:  # need enough samples
+            rate = 100 * sum(1 for r in in_range if r['recreated']) / len(in_range)
+            if rate < 20 and recommended is None:
+                recommended = low
+                print(f"  -> Age >= {low} has <20% recreation rate")
+                print(f"  -> Consider setting BOX64_DYNAREC_PURGE_AGE={low}")
+                break
+
+    if recommended is None:
+        print("  -> Not enough data to recommend a threshold")
+    print()
+
+
+def timeline_analysis(events, num_sections=20):
+    """Analyze purging behavior over time, split into sections"""
+
+    if len(events) < num_sections:
+        print(f"Not enough events for timeline analysis (need at least {num_sections})")
+        return
+
+    section_size = len(events) // num_sections
+
+    print("=" * 90)
+    print(f"TIMELINE ANALYSIS ({num_sections} sections, ~{section_size:,} events each)")
+    print("=" * 90)
+
+    print(f"{'Section':>8} | {'Events':>8} | {'Success':>8} | {'Blocked':>8} | {'Skip':>8} | {'S-Rate':>7} | {'Uniq X64':>8}")
+    print("-" * 90)
+
+    # Track x64 addresses seen so far (for recreation detection)
+    seen_success_x64 = set()  # x64 addresses that were purged in previous sections
+
+    section_stats = []
+
+    for section in range(num_sections):
+        start_idx = section * section_size
+        end_idx = start_idx + section_size if section < num_sections - 1 else len(events)
+        window = events[start_idx:end_idx]
+
         type_counts = Counter(e['type'] for e in window)
+
+        # Unique x64 addresses in this section
+        section_x64 = set(e['x64_addr'] for e in window)
+
+        # Recreated = x64 addresses that were purged before and now appear again
+        success_x64_this_section = set(e['x64_addr'] for e in window if e['type'] == 'SUCCESS')
+        skip_x64_this_section = set(e['x64_addr'] for e in window if e['type'] == 'SKIP')
+
+        # Blocks recreated in this section (were purged before, now seen as SKIP)
+        recreated_this_section = seen_success_x64 & skip_x64_this_section
 
         eligible = type_counts['SUCCESS'] + type_counts['BLOCKED']
         success_rate = 100 * type_counts['SUCCESS'] / eligible if eligible > 0 else 0
 
-        print(f"{i:>10} | {len(window):>8} | {type_counts['SUCCESS']:>8} | "
-              f"{type_counts['BLOCKED']:>8} | {type_counts['SKIP']:>8} | {success_rate:>6.1f}%")
+        section_stats.append({
+            'section': section,
+            'events': len(window),
+            'success': type_counts['SUCCESS'],
+            'blocked': type_counts['BLOCKED'],
+            'skip': type_counts['SKIP'],
+            'success_rate': success_rate,
+            'unique_x64': len(section_x64),
+            'recreated': len(recreated_this_section)
+        })
+
+        print(f"{section:>8} | {len(window):>8} | {type_counts['SUCCESS']:>8} | "
+              f"{type_counts['BLOCKED']:>8} | {type_counts['SKIP']:>8} | {success_rate:>6.1f}% | {len(section_x64):>8}")
+
+        # Update seen success addresses for next section
+        seen_success_x64.update(success_x64_this_section)
+
+    print()
+
+    # Recreation timeline
+    print("=" * 90)
+    print("RECREATION TIMELINE (blocks purged in earlier sections, then seen again as SKIP)")
+    print("=" * 90)
+
+    print(f"{'Section':>8} | {'Recreated':>10} | {'Cumulative Purged':>18} | {'New Purged':>12} | {'Recreation %':>13}")
+    print("-" * 90)
+
+    cumulative_purged = set()
+    for section in range(num_sections):
+        start_idx = section * section_size
+        end_idx = start_idx + section_size if section < num_sections - 1 else len(events)
+        window = events[start_idx:end_idx]
+
+        success_x64 = set(e['x64_addr'] for e in window if e['type'] == 'SUCCESS')
+        skip_x64 = set(e['x64_addr'] for e in window if e['type'] == 'SKIP')
+
+        # Recreated = previously purged addresses that appear as SKIP in this section
+        recreated = cumulative_purged & skip_x64
+        new_purged = success_x64 - cumulative_purged
+
+        recreation_pct = 100 * len(recreated) / len(cumulative_purged) if cumulative_purged else 0
+
+        print(f"{section:>8} | {len(recreated):>10} | {len(cumulative_purged):>18} | {len(new_purged):>12} | {recreation_pct:>12.1f}%")
+
+        cumulative_purged.update(success_x64)
+
+    print()
+    print(f"Total unique x64 addresses ever purged: {len(cumulative_purged):,}")
+    print()
+
+    # CDF of recreation rate per x64 address
+    print("=" * 90)
+    print("RECREATION RATE CDF (per x64 address)")
+    print("=" * 90)
+
+    # Count how many times each x64 address was purged and recreated
+    x64_purge_count = Counter()
+    x64_recreate_count = Counter()
+
+    purged_so_far = set()
+    for e in events:
+        x64 = e['x64_addr']
+        if e['type'] == 'SUCCESS':
+            x64_purge_count[x64] += 1
+            purged_so_far.add(x64)
+        elif e['type'] == 'SKIP':
+            if x64 in purged_so_far:
+                x64_recreate_count[x64] += 1
+
+    # Calculate recreation rate for each address that was purged at least once
+    recreation_rates = []
+    for x64 in x64_purge_count:
+        purge_cnt = x64_purge_count[x64]
+        recreate_cnt = x64_recreate_count.get(x64, 0)
+        # Recreation rate = recreations / purges
+        rate = recreate_cnt / purge_cnt if purge_cnt > 0 else 0
+        recreation_rates.append(rate)
+
+    if recreation_rates:
+        recreation_rates.sort()
+        n = len(recreation_rates)
+
+        print(f"Total x64 addresses purged at least once: {n:,}")
+        print()
+        print("CDF: What percentage of addresses have recreation rate <= X")
+        print()
+        print(f"{'Rate':>12} | {'Count':>10} | {'CDF %':>10}")
+        print("-" * 40)
+
+        # Show CDF at specific rate thresholds
+        thresholds = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 2.0, 5.0, 10.0]
+        for thresh in thresholds:
+            count = sum(1 for r in recreation_rates if r <= thresh)
+            cdf_pct = 100 * count / n
+            print(f"{thresh:>12.1f} | {count:>10,} | {cdf_pct:>9.1f}%")
+
+        print()
+        print("Summary statistics:")
+        print(f"  Min recreation rate:    {min(recreation_rates):.2f}")
+        print(f"  Max recreation rate:    {max(recreation_rates):.2f}")
+        print(f"  Median recreation rate: {recreation_rates[n//2]:.2f}")
+        print(f"  Mean recreation rate:   {sum(recreation_rates)/n:.2f}")
+        print()
+
+        # Show how many addresses were never recreated
+        never_recreated = sum(1 for r in recreation_rates if r == 0)
+        print(f"  Addresses never recreated (rate=0): {never_recreated:,} ({100*never_recreated/n:.1f}%)")
+        always_recreated = sum(1 for r in recreation_rates if r >= 1.0)
+        print(f"  Addresses always recreated (rate>=1): {always_recreated:,} ({100*always_recreated/n:.1f}%)")
     print()
 
 def export_csv(events, output_file):
@@ -262,23 +497,19 @@ def main():
         epilog="""
 Examples:
   # Basic analysis
-  python3 analyze_purge_log.py /tmp/box64_purge_12345.log
+  python3 analyze_purge_log.py box64_purge_12345.log
 
-  # With timeline analysis
+  # With timeline analysis (20 sections + recreation CDF)
   python3 analyze_purge_log.py purge.log --timeline
 
   # Export to CSV
   python3 analyze_purge_log.py purge.log --csv report.csv
-
-  # Full analysis
-  python3 analyze_purge_log.py purge.log --timeline --csv report.csv
         """
     )
 
     parser.add_argument('logfile', help='Path to the purge log file')
     parser.add_argument('--csv', metavar='FILE', help='Export to CSV file')
-    parser.add_argument('--timeline', action='store_true', help='Show timeline analysis')
-    parser.add_argument('--window', type=int, default=1000, help='Window size for timeline (default: 1000)')
+    parser.add_argument('--timeline', action='store_true', help='Show timeline analysis (20 sections)')
 
     args = parser.parse_args()
 
@@ -295,9 +526,10 @@ Examples:
         return 1
 
     analyze_events(events)
+    age_recreation_analysis(events)
 
     if args.timeline:
-        timeline_analysis(events, args.window)
+        timeline_analysis(events)
 
     if args.csv:
         export_csv(events, args.csv)

@@ -89,9 +89,9 @@ static void openPurgeLog(void)
         return;  // no file specified, logging disabled
     }
 
-    // If set to "1" or "true", use default filename
+    // If set to "1" or "true", use default filename in current directory
     if(!strcmp(p, "1") || !strcasecmp(p, "true")) {
-        p = "/tmp/box64_purge_%pid.log";
+        p = "box64_purge_%pid.log";
     }
 
     char tmp[4096];
@@ -1627,8 +1627,8 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
                                 ret = 1;
                         } // fail to set default jump, so skipping
                     } else {
-                        printf_purge_log("[PURGE BLOCKED] Can't purge block %p (in_used=%d, last_used_tick=%u, current_age=%u, min_age_required=%u)\n",
-                            dynablock, in_used, tick, age, purge_threshold);
+                        printf_purge_log("[PURGE BLOCKED] Can't purge block %p (x64_addr=%p, in_used=%d, last_used_tick=%u, current_age=%u, min_age_required=%u)\n",
+                            dynablock, (void*)dynablock->x64_addr, in_used, tick, age, purge_threshold);
                         purgeable = 1;
                     }
                 } else if(tick && dynablock->done) {

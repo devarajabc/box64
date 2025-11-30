@@ -3000,6 +3000,10 @@ void doEnterBlock(dynarec_arm_t* dyn, int ninst, int s1, int s2, int s3)
         STLXRw(s3, s2, s1);
         CBNZw(s3, -3*4);
     }
+    // increment hot (non-atomic, for statistics only)
+    LDRw_U12(s2, s1, offsetof(dynablock_t, hot)-offsetof(dynablock_t, in_used));
+    ADDw_U12(s2, s2, 1);
+    STRw_U12(s2, s1, offsetof(dynablock_t, hot)-offsetof(dynablock_t, in_used));
     // set tick
     LDRx_U12(s2, xEmu, offsetof(x64emu_t, context));
     LDRw_U12(s2, s2, offsetof(box64context_t, tick));

@@ -1618,8 +1618,8 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
                         // free the block, but unreference it first
                         //if(setJumpTableDefaultIfRef64(dynablock->x64_addr, dynablock->block))
                         {
-                            printf_purge_log("[PURGE SUCCESS] Purging old block %p (x64_addr=%p, last_used_tick=%u, current_age=%u, min_age_required=%u)\n",
-                                dynablock, (void*)dynablock->x64_addr, tick, age, purge_threshold);
+                            printf_purge_log("[PURGE SUCCESS] Purging old block %p (x64_addr=%p, hot=%u, last_used_tick=%u, current_age=%u, min_age_required=%u)\n",
+                                dynablock, (void*)dynablock->x64_addr, dynablock->hot, tick, age, purge_threshold);
                             if((n<end) && !n->next.fill )
                                 n = NEXT_BLOCK(n);  //because the block will be agglomerated
                             FreeDynablock(dynablock, 0, 1);
@@ -1627,14 +1627,14 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
                                 ret = 1;
                         } // fail to set default jump, so skipping
                     } else {
-                        printf_purge_log("[PURGE BLOCKED] Can't purge block %p (x64_addr=%p, in_used=%d, last_used_tick=%u, current_age=%u, min_age_required=%u)\n",
-                            dynablock, (void*)dynablock->x64_addr, in_used, tick, age, purge_threshold);
+                        printf_purge_log("[PURGE BLOCKED] Can't purge block %p (x64_addr=%p, hot=%u, in_used=%d, last_used_tick=%u, current_age=%u, min_age_required=%u)\n",
+                            dynablock, (void*)dynablock->x64_addr, dynablock->hot, in_used, tick, age, purge_threshold);
                         purgeable = 1;
                     }
                 } else if(tick && dynablock->done) {
                     int in_used_skip = native_lock_get_d(&dynablock->in_used);
-                    printf_purge_log("[PURGE SKIP] Block too young %p (x64_addr=%p, in_used=%d, last_used_tick=%u, current_age=%u, min_age_required=%u)\n",
-                        dynablock, (void*)dynablock->x64_addr, in_used_skip, tick, age, purge_threshold);
+                    printf_purge_log("[PURGE SKIP] Block too young %p (x64_addr=%p, hot=%u, in_used=%d, last_used_tick=%u, current_age=%u, min_age_required=%u)\n",
+                        dynablock, (void*)dynablock->x64_addr, dynablock->hot, in_used_skip, tick, age, purge_threshold);
                 }
             }
             p = n;

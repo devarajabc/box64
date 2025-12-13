@@ -186,11 +186,14 @@ SUPER()
 
 #ifdef BOX32
 int isCustomAddr(void* p);
-#define SPACE32 (void*)0x100000000LL
 // Check if entire allocation (ptr + size) fits within 32-bit address space
-#define FITS_IN_32BIT(ptr, size) (((uintptr_t)(ptr) + (size)) <= 0xFFFFFFFFULL)
+// Last valid byte is at ptr+size-1, which must be <= 0xFFFFFFFF, so ptr+size <= 0x100000000
+#define FITS_IN_32BIT(ptr, size) (((uintptr_t)(ptr) + (size)) <= 0x100000000ULL)
 void* box32_calloc(size_t n, size_t s)
 {
+    // Check for multiplication overflow
+    if(n && s > SIZE_MAX / n)
+        return NULL;
     size_t total = n * s;
     void* ret = box_calloc(n, s);
     if(ret && FITS_IN_32BIT(ret, total)) return ret;
@@ -220,7 +223,10 @@ void* box32_realloc(void* p, size_t s)
     if(ret && FITS_IN_32BIT(ret, s)) return ret;
     malloc_trim(0);
     void* newret = customMalloc32(s);
-    memcpy(newret, ret, s);
+    // Copy only the valid data - use the smaller of old usable size and new size
+    size_t old_size = box_malloc_usable_size(ret);
+    size_t copy_size = (old_size < s) ? old_size : s;
+    memcpy(newret, ret, copy_size);
     box_free(ret);
     return newret;
 }

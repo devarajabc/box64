@@ -660,7 +660,8 @@ void* map128_customMalloc(size_t size, int is32bits)
     for(int idx=(allocsize-mapsize)>>7;  idx<(allocsize>>7); ++idx)
         map[idx>>3] |= (1<<(idx&7));
     // 32bits check - ensure entire allocation fits in 32-bit space
-    if(is32bits && ((uintptr_t)p + allocsize > 0xFFFFFFFFULL)) {
+    // Last valid byte at ptr+size-1 must be <= 0xFFFFFFFF, so ptr+size must be <= 0x100000000
+    if(is32bits && ((uintptr_t)p + allocsize > 0x100000000ULL)) {
         printf_log(LOG_INFO, "Warning: failed to allocate 0x%x (0x%x) bytes in 32bits address space (block %d, addr %p)\n", size, allocsize, i, p);
         // failed to allocate memory
         if(BOX64ENV(showbt) || BOX64ENV(showsegv)) {
@@ -932,7 +933,8 @@ void* internal_customMalloc(size_t size, int is32bits)
     n->next.x32 = 0;
     n->prev.x32 = m->next.x32;
     // Ensure entire allocation fits in 32-bit space (start + size <= 4GB)
-    if(is32bits && ((uintptr_t)p + allocsize > 0xFFFFFFFFULL)) {
+    // Last valid byte at ptr+size-1 must be <= 0xFFFFFFFF, so ptr+size must be <= 0x100000000
+    if(is32bits && ((uintptr_t)p + allocsize > 0x100000000ULL)) {
         printf_log(LOG_INFO, "Warning: failed to allocate 0x%x (0x%x) bytes in 32bits address space (block %d, addr %p)\n", size, allocsize, i, p);
         // failed to allocate memory
         if(BOX64ENV(showbt) || BOX64ENV(showsegv)) {
@@ -1224,7 +1226,8 @@ void* internal_customMemAligned(size_t align, size_t size, int is32bits)
     p_blocks[i].first = p;
     p_blocks[i].size = allocsize;
     // Ensure entire allocation fits in 32-bit space (start + size <= 4GB)
-    if(is32bits && ((uintptr_t)p + allocsize > 0xFFFFFFFFULL)) {
+    // Last valid byte at ptr+size-1 must be <= 0xFFFFFFFF, so ptr+size must be <= 0x100000000
+    if(is32bits && ((uintptr_t)p + allocsize > 0x100000000ULL)) {
         printf_log(LOG_INFO, "Warning: failed to allocate aligned 0x%x (0x%x) bytes in 32bits address space (block %d, addr %p)\n", size, allocsize, i, p);
         // failed to allocate memory
         if(BOX64ENV(showbt) || BOX64ENV(showsegv)) {

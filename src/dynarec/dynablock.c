@@ -127,6 +127,8 @@ void FreeInvalidDynablock(dynablock_t* db, int need_lock)
 void FreeDynablock(dynablock_t* db, int need_lock, int need_remove)
 {
     if(db) {
+        // Remove from S3-FIFO queues if tracked
+        S3FIFO_on_block_freed(db);
         if(db->gone)
             return; // already in the process of deletion!
         dynarec_log(LOG_DEBUG, "FreeDynablock(%p), db->block=%p x64=%p:%p already gone=%d\n", db, db->block, db->x64_addr, db->x64_addr+db->x64_size-1, db->gone);
@@ -224,7 +226,7 @@ void cancelFillBlock()
 void dynablock_leave_runtime(dynablock_t* db)
 {
     if(!db) return;
-    if(!db->tick) return;
+    if(!db->in_used) return;
     __atomic_fetch_sub(&db->in_used, 1, __ATOMIC_ACQ_REL);
 }
 
@@ -317,6 +319,8 @@ static dynablock_t* internalDBGetBlock(x64emu_t* emu, uintptr_t addr, uintptr_t 
                 }
                 block->done = 1;    // don't validate the block if the size is null, but keep the block
                 rb_inc(my_context->db_sizes, block->x64_size, block->x64_size+1);
+                // Register with S3-FIFO eviction manager
+                S3FIFO_on_block_created(block);
             }
         }
     }

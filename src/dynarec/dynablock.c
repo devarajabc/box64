@@ -48,6 +48,8 @@ dynablock_t* InvalidDynablock(dynablock_t* db, int need_lock)
         setJumpTableDefault64(db->x64_addr);
         if(need_lock)
             mutex_lock(&my_context->mutex_dyndump);
+        // Remove from S3-FIFO queues before marking as gone (must be under lock)
+        S3FIFO_on_block_freed(db);
         db->done = 0;
         db->gone = 1;
         uintptr_t db_size = db->x64_size;
@@ -135,6 +137,8 @@ void FreeDynablock(dynablock_t* db, int need_lock, int need_remove)
             setJumpTableDefault64(db->x64_addr);
         if(need_lock)
             mutex_lock(&my_context->mutex_dyndump);
+        // Remove from S3-FIFO queues if tracked (must be under lock)
+        S3FIFO_on_block_freed(db);
         dynarec_log(LOG_DEBUG, " -- FreeDyrecMap(%p, %d)\n", db->actual_block, db->size);
         db->done = 0;
         db->gone = 1;
@@ -166,6 +170,7 @@ void MarkDynablock(dynablock_t* db)
             if(!old->gone && db!=old) {
                 printf_log(LOG_INFO, "Warning, couldn't mark block as dirty for %p, block=%p, current_block=%p\n", old->x64_addr, old, db);
                 // the block is lost, need to invalidate it...
+                S3FIFO_on_block_freed(old);
                 old->gone = 1;
                 old->done = 0;
                 if(!db || db->previous)
@@ -224,7 +229,7 @@ void cancelFillBlock()
 void dynablock_leave_runtime(dynablock_t* db)
 {
     if(!db) return;
-    if(!db->tick) return;
+    if(!db->in_used) return;
     __atomic_fetch_sub(&db->in_used, 1, __ATOMIC_ACQ_REL);
 }
 
@@ -317,6 +322,8 @@ static dynablock_t* internalDBGetBlock(x64emu_t* emu, uintptr_t addr, uintptr_t 
                 }
                 block->done = 1;    // don't validate the block if the size is null, but keep the block
                 rb_inc(my_context->db_sizes, block->x64_size, block->x64_size+1);
+                // Register with S3-FIFO eviction manager
+                S3FIFO_on_block_created(block);
             }
         }
     }

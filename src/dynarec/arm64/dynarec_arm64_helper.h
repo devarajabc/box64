@@ -1607,7 +1607,7 @@ void ymm_mark_zero(dynarec_arm_t* dyn, int ninst, int a);
 int fpu_get_reg_ymm(dynarec_arm_t* dyn, int ninst, int t, int ymm, int k1, int k2, int k3);
 // Preload XMM/YMM regs
 void doPreload(dynarec_arm_t* dyn, int ninst);
-// Enter a block (atomic inrement of hot and in_used)
+// Enter a block (atomic increment of freq and in_used)
 void doEnterBlock(dynarec_arm_t* dyn, int ninst, int s1, int s2, int s3);
 // Leave a block (atomic decrement of in_used)
 void doLeaveBlock(dynarec_arm_t* dyn, int ninst, int s1, int s2, int s3);

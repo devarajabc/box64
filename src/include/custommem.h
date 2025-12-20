@@ -150,6 +150,11 @@ void getLockAddressRange(uintptr_t start, size_t size, uintptr_t addrs[]);   // 
 void CheckHotPage(uintptr_t addr, uint32_t prot);
 int isInHotPage(uintptr_t addr);
 int checkInHotPage(uintptr_t addr);
+
+// ---- S3-FIFO eviction policy (used by dynablock management)
+typedef struct dynablock_s dynablock_t;
+void S3FIFO_cache_write(dynablock_t* db);       // unified evict + insert per S3-FIFO paper
+void S3FIFO_on_block_freed(dynablock_t* db);    // called when block is freed
 #endif
 
 // this will simulate an x86_64 version of the function (no tracking will done, but tracking will be used)

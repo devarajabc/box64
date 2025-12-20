@@ -2752,10 +2752,20 @@ void doEnterBlock(dynarec_arm_t* dyn, int ninst, int s1, int s2, int s3)
         STLXRw(s3, s2, s1);
         CBNZw(s3, -3*4);
     }
-    // set tick
-    LDRx_U12(s2, xEmu, offsetof(x64emu_t, context));
-    LDRw_U12(s2, s2, offsetof(box64context_t, tick));
-    STRw_U12(s2, s1, offsetof(dynablock_t, tick)-offsetof(dynablock_t, in_used));
+    // Atomic saturating increment of freq (S3-FIFO frequency counter, capped at 3)
+    // Must be atomic to avoid race with eviction's decrement
+    ADDx_U12(s1, s1, offsetof(dynablock_t, freq)-offsetof(dynablock_t, in_used));
+    // Optimistic read: skip atomic loop if already saturated
+    LDRw_U12(s2, s1, 0);              // Fast non-atomic peek
+    CMPSw_U12(s2, 3);
+    Bcond(cGE, 5*4);                  // Already >= 3, skip to exit
+    // retry_loop: (only reached if freq < 3)
+    LDAXRw(s2, s1);                   // Load-acquire exclusive
+    CMPSw_U12(s2, 3);                 // Re-check (may have changed)
+    CSINCw(s2, s2, s2, cGE);          // s2 = (freq >= 3) ? freq : freq + 1
+    STLXRw(s3, s2, s1);               // Store-release exclusive
+    CBNZw(s3, -4*4);                  // Retry if contention
+    // exit:
     MESSAGE(LOG_INFO, "-------- doEnter\n");
 }
 void doLeaveBlock(dynarec_arm_t* dyn, int ninst, int s1, int s2, int s3)

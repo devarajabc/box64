@@ -31,6 +31,330 @@
 // init inside dynablocks.c
 static mmaplist_t          *mmaplist = NULL;
 static rbtree_t            *rbt_dynmem = NULL;
+
+// S3-FIFO Eviction Policy for Dynablocks
+//
+// Algorithm based on:
+//   "FIFO queues are all you need for cache eviction"
+//   Juncheng Yang, Yazhuo Zhang, Ziyue Qiu, Yao Yue, Rashmi Vinayak
+//   SOSP 2023, https://dl.acm.org/doi/10.1145/3600006.3613147
+
+#define S3FIFO_QUEUE_FLOATING ((s3fifo_queue_t*)(uintptr_t)1)
+
+
+KHASH_MAP_INIT_INT64(ghost, uint32_t)  // value = ring index
+
+// Round up to next power of 2 (for fast modulo via bitmask)
+static inline uint32_t next_power_of_2(uint32_t v) {
+    if (v <= 1) return 1;
+    return 1U << (32 - __builtin_clz(v - 1));
+}
+
+
+typedef struct {
+    dynablock_t* head;
+    dynablock_t* tail;
+    uint32_t count;
+    uint32_t capacity;
+} s3fifo_queue_t;
+
+typedef struct {
+    uintptr_t* ring;
+    khash_t(ghost)* hash;
+    uint32_t head;
+    uint32_t mask;
+} s3fifo_ghost_t;
+
+static struct {
+    s3fifo_queue_t small_queue;
+    s3fifo_queue_t main_queue;
+    s3fifo_ghost_t ghost;
+    int initialized;
+    uint32_t floating_count;  // Track blocks in FLOATING state (not evictable)
+    uint32_t init_count;      // Track how many times init was called
+} s3fifo = {0};
+
+static void s3fifo_push(s3fifo_queue_t* q, dynablock_t* db) {
+    db->s3fifo_prev = q->tail;
+    db->s3fifo_next = NULL;
+    dynablock_t** indirect = q->tail ? &q->tail->s3fifo_next : &q->head;
+    *indirect = db;
+    q->tail = db;
+    q->count++;
+}
+
+static dynablock_t* s3fifo_pop(s3fifo_queue_t* q) {
+    dynablock_t* db = q->head;
+    if (!db) {
+        return NULL;
+    }
+
+    dynablock_t* new_head = db->s3fifo_next;
+    q->head = new_head;
+    dynablock_t** indirect = new_head ? &new_head->s3fifo_prev : &q->tail;
+    *indirect = NULL;
+    db->s3fifo_prev = NULL;
+    db->s3fifo_next = NULL;
+    q->count--;
+
+    return db;
+}
+
+static void s3fifo_remove(s3fifo_queue_t* q, dynablock_t* db) {
+    if (!db || db->s3fifo_queue != q) {
+        return;
+    }
+    if (q->count == 0) {
+        db->s3fifo_queue = NULL;
+        return;
+    }
+
+    dynablock_t** next_indirect = db->s3fifo_prev ? &db->s3fifo_prev->s3fifo_next : &q->head;
+    dynablock_t** prev_indirect = db->s3fifo_next ? &db->s3fifo_next->s3fifo_prev : &q->tail;
+    *next_indirect = db->s3fifo_next;
+    *prev_indirect = db->s3fifo_prev;
+    db->s3fifo_prev = NULL;
+    db->s3fifo_next = NULL;
+    q->count--;
+}
+
+static void s3fifo_ghost_push(uintptr_t x64_addr) {
+    s3fifo_ghost_t* g = &s3fifo.ghost;
+    if (!g->ring || !g->hash) return;
+    if (kh_get(ghost, g->hash, x64_addr) != kh_end(g->hash)) {
+        printf_log(LOG_DEBUG, "S3FIFO: ghost_push %p SKIP (already in ghost)\n", (void*)x64_addr);
+        return;
+    }
+
+    uintptr_t old = g->ring[g->head];
+    if (old) {
+        khiter_t k = kh_get(ghost, g->hash, old);
+        if (k != kh_end(g->hash) && kh_value(g->hash, k) == g->head)
+            kh_del(ghost, g->hash, k);
+    }
+
+    g->ring[g->head] = x64_addr;
+    int ret;
+    khiter_t k = kh_put(ghost, g->hash, x64_addr, &ret);
+    if (ret < 0) return;
+    kh_value(g->hash, k) = g->head;
+    g->head = (g->head + 1) & g->mask;
+    printf_log(LOG_DEBUG, "S3FIFO: ghost_push %p (ghost_size=%u)\n", (void*)x64_addr, kh_size(g->hash));
+}
+
+static int s3fifo_ghost_pop(uintptr_t x64_addr) {
+    s3fifo_ghost_t* g = &s3fifo.ghost;
+    if (!g->hash) return 0;
+    khiter_t k = kh_get(ghost, g->hash, x64_addr);
+    if (k != kh_end(g->hash)) {
+        kh_del(ghost, g->hash, k);
+        printf_log(LOG_DEBUG, "S3FIFO: ghost_pop %p HIT! (will insert to MAIN)\n", (void*)x64_addr);
+        return 1;
+    }
+    printf_log(LOG_DEBUG, "S3FIFO: ghost_pop %p MISS (will insert to SMALL)\n", (void*)x64_addr);
+    return 0;
+}
+
+static void s3fifo_init(uint32_t capacity) {
+    s3fifo.init_count++;
+    if (s3fifo.initialized) {
+        // MULTIPLE INIT DETECTION: This should not happen!
+        printf_log(LOG_INFO, "S3FIFO: MULTIPLE INIT ATTEMPT #%u (already initialized)\n", s3fifo.init_count);
+        return;
+    }
+    printf_log(LOG_INFO, "S3FIFO: init #%u starting\n", s3fifo.init_count);
+    // ~15.6% SMALL (1/8 + 1/32 = 5/32), ~84.4% MAIN
+    s3fifo.small_queue.capacity = (capacity >> 3) + (capacity >> 5);
+    if (s3fifo.small_queue.capacity < 100)
+        s3fifo.small_queue.capacity = 100;
+    s3fifo.main_queue.capacity = capacity - s3fifo.small_queue.capacity;
+    uint32_t ghost_cap = next_power_of_2(s3fifo.main_queue.capacity);
+    s3fifo.ghost.mask = ghost_cap - 1;
+    s3fifo.ghost.ring = (uintptr_t*)box_calloc(ghost_cap, sizeof(uintptr_t));
+    s3fifo.ghost.hash = kh_init(ghost);
+    s3fifo.ghost.head = 0;
+    s3fifo.initialized = 1;
+    printf_log(LOG_INFO, "S3FIFO: INITIALIZED #%u total_cap=%u small_cap=%u main_cap=%u ghost_cap=%u\n",
+               s3fifo.init_count, capacity, s3fifo.small_queue.capacity, s3fifo.main_queue.capacity, ghost_cap);
+}
+
+static void s3fifo_fini(void) {
+    if (!s3fifo.initialized) {
+        printf_log(LOG_DEBUG, "S3FIFO: fini SKIP (not initialized)\n");
+        return;
+    }
+    printf_log(LOG_INFO, "S3FIFO: FINALIZE (small=%d/%d main=%d/%d ghost=%u float=%u)\n",
+               s3fifo.small_queue.count, s3fifo.small_queue.capacity,
+               s3fifo.main_queue.count, s3fifo.main_queue.capacity,
+               s3fifo.ghost.hash ? kh_size(s3fifo.ghost.hash) : 0,
+               s3fifo.floating_count);
+    if (s3fifo.ghost.ring)
+        box_free(s3fifo.ghost.ring);
+    if (s3fifo.ghost.hash)
+        kh_destroy(ghost, s3fifo.ghost.hash);
+    memset(&s3fifo, 0, sizeof(s3fifo));
+}
+
+// Single-eviction function per S3-FIFO paper
+// Returns 1 if evicted, 0 if failed (all blocks in-use)
+// Per reference S3FIFO_evict_fifo (evict from SMALL queue)
+static int s3fifo_evict_small(void) {
+    int has_evicted = 0;
+    uint32_t scanned = 0;
+    uint32_t initial_count = s3fifo.small_queue.count;
+    while (!has_evicted && s3fifo.small_queue.count > 0) {
+        // If we've scanned all items without evicting, give up
+        if (scanned >= initial_count) {
+            printf_log(LOG_DEBUG, "S3FIFO: SMALL eviction scan limit reached (scanned=%u, all in-use with freq=0)\n", scanned);
+            break;
+        }
+        scanned++;
+
+        dynablock_t* db = s3fifo_pop(&s3fifo.small_queue);
+        if (!db) break;
+        db->s3fifo_queue = NULL;
+
+        // Invalidated blocks: free immediately (don't add to ghost - x64 code changed)
+        if (db->gone) {
+            printf_log(LOG_DEBUG, "S3FIFO: SMALL evict gone block %p (x64=%p)\n", db, db->x64_addr);
+            FreeDynablock(db, 0, 1); has_evicted = 1; continue;
+        }
+
+        // In-use blocks: promote to MAIN if freq >= 1 (conservative), else requeue
+        uint32_t in_used = native_lock_get_d(&db->in_used);
+        uint32_t freq = native_lock_get_d(&db->freq);
+        if (in_used > 3) {
+            printf_log(LOG_DEBUG, "S3FIFO: SMALL mark floating %p (in_used=%u)\n", db, in_used);
+            db->s3fifo_queue = S3FIFO_QUEUE_FLOATING; s3fifo.floating_count++; continue;
+        }
+        if (in_used > 0) {
+            if (freq >= 1) {
+                // Promote in-use block to MAIN (has been accessed at least once)
+                printf_log(LOG_DEBUG, "S3FIFO: SMALL promote in-use %p to MAIN (in_used=%u, freq=%u)\n", db, in_used, freq);
+                db->s3fifo_queue = &s3fifo.main_queue;
+                s3fifo_push(&s3fifo.main_queue, db);
+            } else {
+                // freq=0, first access - requeue to give it a chance
+                printf_log(LOG_DEBUG, "S3FIFO: SMALL requeue in-use %p (in_used=%u, freq=%u)\n", db, in_used, freq);
+                db->s3fifo_queue = &s3fifo.small_queue;
+                s3fifo_push(&s3fifo.small_queue, db);
+            }
+            continue;
+        }
+        if (freq >= 2) {
+            // Promote to MAIN (freq is preserved)
+            printf_log(LOG_DEBUG, "S3FIFO: SMALL promote to MAIN %p (freq=%u)\n", db, freq);
+            db->s3fifo_queue = &s3fifo.main_queue;
+            s3fifo_push(&s3fifo.main_queue, db);
+        } else {
+            // Evict: add to ghost, free block
+            printf_log(LOG_DEBUG, "S3FIFO: SMALL evict %p (x64=%p, freq=%u)\n", db, db->x64_addr, freq);
+            s3fifo_ghost_push((uintptr_t)db->x64_addr);
+            FreeDynablock(db, 0, 1);
+            has_evicted = 1;
+        }
+    }
+    return has_evicted;
+}
+
+// Per reference S3FIFO_evict_main (evict from MAIN queue)
+static int s3fifo_evict_main(void) {
+    int has_evicted = 0;
+    uint32_t scanned = 0;
+    uint32_t initial_count = s3fifo.main_queue.count;
+    while (!has_evicted && s3fifo.main_queue.count > 0) {
+        // If we've scanned all items without evicting, give up
+        if (scanned >= initial_count) {
+            printf_log(LOG_DEBUG, "S3FIFO: MAIN eviction scan limit reached (scanned=%u, all in-use)\n", scanned);
+            break;
+        }
+        scanned++;
+
+        dynablock_t* db = s3fifo_pop(&s3fifo.main_queue);
+        if (!db) break;
+        db->s3fifo_queue = NULL;
+
+        // Invalidated blocks: free immediately
+        if (db->gone) {
+            printf_log(LOG_DEBUG, "S3FIFO: MAIN evict gone block %p (x64=%p)\n", db, db->x64_addr);
+            FreeDynablock(db, 0, 1); has_evicted = 1; continue;
+        }
+
+        // In-use blocks: requeue or mark floating
+        uint32_t in_used = native_lock_get_d(&db->in_used);
+        if (in_used > 3) {
+            printf_log(LOG_DEBUG, "S3FIFO: MAIN mark floating %p (in_used=%u)\n", db, in_used);
+            db->s3fifo_queue = S3FIFO_QUEUE_FLOATING; s3fifo.floating_count++; continue;
+        }
+        if (in_used > 0) {
+            printf_log(LOG_DEBUG, "S3FIFO: MAIN requeue in-use %p (in_used=%u)\n", db, in_used);
+            db->s3fifo_queue = &s3fifo.main_queue; s3fifo_push(&s3fifo.main_queue, db); continue;
+        }
+
+        // Atomic decrement of freq - returns old value, decrements only if > 0
+        uint32_t old_freq = native_lock_decifnot0(&db->freq);
+        if (old_freq >= 1) {
+            // Was decremented, reinsert to MAIN
+            printf_log(LOG_DEBUG, "S3FIFO: MAIN reinsert %p (freq %u->%u)\n", db, old_freq, old_freq - 1);
+            db->s3fifo_queue = &s3fifo.main_queue;
+            s3fifo_push(&s3fifo.main_queue, db);
+        } else {
+            // Was 0 (not decremented), evict
+            printf_log(LOG_DEBUG, "S3FIFO: MAIN evict %p (x64=%p, freq=0)\n", db, db->x64_addr);
+            FreeDynablock(db, 0, 1);
+            has_evicted = 1;
+        }
+    }
+    return has_evicted;
+}
+
+void S3FIFO_cache_write(dynablock_t* db) {
+    if (!BOX64ENV(dynarec_purge)) return;
+    if (!s3fifo.initialized || !db || !db->done) return;
+    if (db->s3fifo_queue) return;  // Already tracked
+    db->freq = 0;
+
+    // Per reference S3FIFO_evict(): evict one queue at a time with priority
+    // - If MAIN > capacity OR SMALL is empty → evict from MAIN
+    // - Else → evict from SMALL (may promote to MAIN, so re-check next iteration)
+    while (s3fifo.small_queue.count >= s3fifo.small_queue.capacity ||
+           s3fifo.main_queue.count > s3fifo.main_queue.capacity) {
+        int evicted;
+        if (s3fifo.main_queue.count > s3fifo.main_queue.capacity ||
+            s3fifo.small_queue.count == 0) {
+            evicted = s3fifo_evict_main();
+        } else {
+            evicted = s3fifo_evict_small();
+        }
+        if (!evicted) break;  // All blocks in-use, can't evict
+    }
+
+    // Step 2: Check ghost, determine target queue (line 10)
+    int ghost_hit = s3fifo_ghost_pop((uintptr_t)db->x64_addr);
+
+    // Step 3: Insert to M if ghost hit, else to S (lines 11-13)
+    s3fifo_queue_t* target = ghost_hit ? &s3fifo.main_queue : &s3fifo.small_queue;
+    db->s3fifo_queue = target;
+    s3fifo_push(target, db);
+
+    printf_log(LOG_DEBUG, "S3FIFO: insert %p (x64=%p) to %s (ghost=%d) [S:%u/%u M:%u/%u]\n",
+        db, db->x64_addr, ghost_hit ? "MAIN" : "SMALL", ghost_hit,
+        s3fifo.small_queue.count, s3fifo.small_queue.capacity,
+        s3fifo.main_queue.count, s3fifo.main_queue.capacity);
+}
+
+void S3FIFO_on_block_freed(dynablock_t* db) {
+    if (!BOX64ENV(dynarec_purge) || !s3fifo.initialized || !db) return;
+    if (!db->s3fifo_queue) return;  // Already removed (eviction case)
+
+    if (db->s3fifo_queue == S3FIFO_QUEUE_FLOATING) {
+        if (s3fifo.floating_count > 0) s3fifo.floating_count--;
+    } else {
+        s3fifo_remove(db->s3fifo_queue, db);
+    }
+    db->s3fifo_queue = NULL;
+}
+
 static uint64_t jmptbl_allocated = 0, jmptbl_allocated1 = 0, jmptbl_allocated2 = 0, jmptbl_allocated3 = 0;
 #if JMPTABL_SHIFTMAX != 16
 #error Incorect value for jumptable shift max that should be 16
@@ -1585,68 +1909,6 @@ dynablock_t* FindDynablockFromNativeAddress(void* p)
     return NULL;
 }
 
-// To measure speed at wich blocks are created, to avoid purge when lots of blocks are created in burst
-static uint64_t start_time = 0;
-static uint32_t start_tick = 0;
-static uint64_t tick_freq = 0;
-static uint64_t cur_speed = 0;
-
-void UpdateBlockCreationSpeed()
-{
-    if(!tick_freq) {
-        tick_freq = ReadTSCFrequency(NULL);
-        start_tick = my_context->tick;
-        start_time = ReadTSC(NULL);
-    }
-    uint64_t cur_time = ReadTSC(NULL);
-    // compute elapsed time is micro seconds
-    uint64_t elapsed_time = (cur_time-start_time)*1000000LL/tick_freq;
-    if(my_context->tick-start_tick>100 || elapsed_time>1000) {
-        // update speed each 100 blocks created or 1ms elapsed
-        cur_speed = (my_context->tick-start_tick)*1000000LL/elapsed_time;
-        start_tick = my_context->tick;
-        start_time = cur_time;
-    }
-}
-
-int PurgeDynarecMap(mmaplist_t* list, size_t size)
-{
-    if(cur_speed>100) return 0;   // 100 blocks / sec is a burst!
-    // check all blocks where tick is old enough and in_used==0, then delete them
-    // return 1 as soon as one block has been deleted, 0 else
-    // beware that tick=0 blocks means they were never executed and should not be touched
-    int ret = 0;
-    for(int i=0; i<list->size && !ret; ++i) {
-        blocklist_t* bl = list->chunks[i];
-        blockmark_t* p = bl->block;
-        blockmark_t* end = bl->block + bl->size - sizeof(blockmark_t);
-
-        while(p<end) {
-            blockmark_t *n = NEXT_BLOCK(p);
-            if(p->next.fill) {
-                dynablock_t* dynablock = *(dynablock_t**)p->mark;
-                int tick = native_lock_get_d(&dynablock->tick);
-                if(tick && dynablock->done && (my_context->tick > tick) && ((my_context->tick-tick)>=BOX64ENV(dynarec_purge_age))) {
-                    int in_used = native_lock_get_d(&dynablock->in_used);
-                    if(!in_used) {
-                        // free the block, but unreference it first
-                        //if(setJumpTableDefaultIfRef64(dynablock->x64_addr, dynablock->block)) 
-                        {
-                            dynarec_log(LOG_INFO/*LOG_DEBUG*/, " PurgeDynablock %p\n", dynablock);
-                            if((n<end) && !n->next.fill )
-                                n = NEXT_BLOCK(n);  //because the block will be agglomerated
-                            FreeDynablock(dynablock, 0, 1);
-                            if((bl->maxfree>=size))
-                                ret = 1;
-                        } // fail to set default jump, so skipping
-                    }
-                }
-            }
-            p = n;
-        }
-    }
-    return ret;
-}
 #ifdef TRACE_MEMSTAT
 static uint64_t dynarec_allocated = 0;
 #endif
@@ -1657,11 +1919,6 @@ uintptr_t AllocDynarecMap(uintptr_t x64_addr, size_t size, int is_new)
 
     size = roundSize(size);
 
-    if(BOX64ENV(dynarec_purge)) {
-        __atomic_fetch_add(&my_context->tick, 1, __ATOMIC_RELAXED);
-        UpdateBlockCreationSpeed();
-    }
-
     mmaplist_t* list = GetMmaplistByAddr(x64_addr);
     if(!list)
         list = mmaplist;
@@ -1671,26 +1928,20 @@ uintptr_t AllocDynarecMap(uintptr_t x64_addr, size_t size, int is_new)
     list->dirty = 1;
     // check if there is space in current open ones
     uintptr_t sz = size + 2*sizeof(blockmark_t);
-    int recheck = 0;
-    do {
-        for(int i=0; i<list->size; ++i) {
-            if(list->chunks[i]->maxfree>=size) {
-                // looks free, try to alloc!
-                size_t rsize = 0;
-                void* sub = getFirstBlock(list->chunks[i]->block, size, &rsize, list->chunks[i]->first);
-                if(sub) {
-                    void* ret = allocBlock(list->chunks[i]->block, sub, size, &list->chunks[i]->first);
-                    if(rsize==list->chunks[i]->maxfree)
-                        list->chunks[i]->maxfree = getMaxFreeBlock(list->chunks[i]->block, list->chunks[i]->size, list->chunks[i]->first);
-                    //rb_set_64(list->chunks[i].tree, (uintptr_t)ret, (uintptr_t)ret+size, (uintptr_t)ret);
-                    return (uintptr_t)ret;
-                }
+    for(int i=0; i<list->size; ++i) {
+        if(list->chunks[i]->maxfree>=size) {
+            // looks free, try to alloc!
+            size_t rsize = 0;
+            void* sub = getFirstBlock(list->chunks[i]->block, size, &rsize, list->chunks[i]->first);
+            if(sub) {
+                void* ret = allocBlock(list->chunks[i]->block, sub, size, &list->chunks[i]->first);
+                if(rsize==list->chunks[i]->maxfree)
+                    list->chunks[i]->maxfree = getMaxFreeBlock(list->chunks[i]->block, list->chunks[i]->size, list->chunks[i]->first);
+                //rb_set_64(list->chunks[i].tree, (uintptr_t)ret, (uintptr_t)ret+size, (uintptr_t)ret);
+                return (uintptr_t)ret;
             }
         }
-        // check if we can remove blocks before allocating a new one
-        if(BOX64ENV(dynarec_purge))
-            recheck = recheck?0:PurgeDynarecMap(list, size);  // don't do purge all the time, it's too time consuming
-    } while(recheck);
+    }
     // need to add a new
     if(list->size == list->cap) {
         list->cap+=4;
@@ -1762,7 +2013,9 @@ void FreeDynarecMap(uintptr_t addr)
 {
     if(!addr)
         return;
-    
+    // Remove from S3-FIFO
+    dynablock_t* db = *(dynablock_t**)addr;
+    if(db) S3FIFO_on_block_freed(db);
 
     blocklist_t* bl = (blocklist_t*)rb_get_64(rbt_dynmem, addr);
 
@@ -2930,6 +3183,8 @@ static void atfork_child_custommem(void)
 {
     // (re)init mutex if it was lock before the fork
     init_mutexes();
+    // Note: S3-FIFO uses mutex_dyndump (reinitialized by init_mutexes)
+    // so no additional reinit needed
 }
 void preserve_highest32()
 {
@@ -3009,9 +3264,7 @@ void my_reserveHighMem()
                 bend = 1ULL<<48;
             void* ret = InternalMmap((void*)cur, bend - cur, 0, MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE, -1, 0);
             printf_log(LOG_DEBUG, "Reserve %p-%p => %p (%s)\n", (void*)cur, bend, ret, (ret==MAP_FAILED)?strerror(errno):"ok");
-            if(ret!=(void*)-1) {
-                rb_set(mapallmem, cur, bend, MEM_RESERVED);
-            }
+            if(ret!=(void*)-1) rb_set(mapallmem, cur, bend, MEM_RESERVED);
         }
         cur = bend;
     }
@@ -3067,6 +3320,10 @@ void init_custommem_helper(box64context_t* ctx)
     }
     lockaddress = kh_init(lockaddress);
     rbt_dynmem = rbtree_init("rbt_dynmem");
+    // Initialize S3-FIFO eviction manager if purging is enabled
+    if(BOX64ENV(dynarec_purge)) {
+        s3fifo_init(BOX64ENV(s3fifo_capacity));
+    }
 #endif
     pthread_atfork(NULL, NULL, atfork_child_custommem);
     // init mapallmem list
@@ -3153,6 +3410,8 @@ void fini_custommem_helper(box64context_t *ctx)
             }
         #endif
     }
+    // Cleanup S3-FIFO eviction manager
+    s3fifo_fini();
     kh_destroy(lockaddress, lockaddress);
     lockaddress = NULL;
     rbtree_delete(rbt_dynmem);

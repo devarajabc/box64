@@ -106,7 +106,7 @@ void FreeInvalidDynablock(dynablock_t* db, int need_lock)
 {
     if(db) {
         if(!db->gone)
-            return; // already in the process of deletion!
+            return; // not marked gone, skip
         dynarec_log(LOG_DEBUG, "FreeInvalidDynablock(%p), db->block=%p x64=%p:%p already gone=%d\n", db, db->block, db->x64_addr, db->x64_addr+db->x64_size-1, db->gone);
         uintptr_t db_size = db->x64_size;
         if(need_lock)
@@ -173,7 +173,7 @@ void MarkDynablock(dynablock_t* db)
                 else
                     db->previous = old;
             }
-        } 
+        }
         #ifdef ARCH_NOP
         else if(db->callret_size) {
             // mark all callrets to UDF
@@ -224,8 +224,7 @@ void cancelFillBlock()
 void dynablock_leave_runtime(dynablock_t* db)
 {
     if(!db) return;
-    if(!db->tick) return;
-    __atomic_fetch_sub(&db->in_used, 1, __ATOMIC_ACQ_REL);
+    native_lock_decifnot0(&db->in_used);  // Atomic decrement only if > 0, prevents underflow
 }
 
 /* 
@@ -283,16 +282,18 @@ static dynablock_t* internalDBGetBlock(x64emu_t* emu, uintptr_t addr, uintptr_t 
     }
 #ifndef _WIN32
     if((getProtection_fast(addr)&req_prot)!=req_prot) {// cannot be run, get out of the Dynarec
-        if(need_lock)
+        if(need_lock) {
             mutex_unlock(&my_context->mutex_dyndump);
+        }
         pthread_sigmask(SIG_SETMASK, &old_sig, NULL);
         return NULL;
     }
 #endif
     if (SigSetJmp(GET_JUMPBUFF(dynarec_jmpbuf), 1)) {
         printf_log(LOG_INFO, "FillBlock at %p triggered a segfault, canceling\n", (void*)addr);
-        if(need_lock)
+        if(need_lock) {
             mutex_unlock(&my_context->mutex_dyndump);
+        }
         pthread_sigmask(SIG_SETMASK, &old_sig, NULL);
         return NULL;
     }
@@ -317,11 +318,14 @@ static dynablock_t* internalDBGetBlock(x64emu_t* emu, uintptr_t addr, uintptr_t 
                 }
                 block->done = 1;    // don't validate the block if the size is null, but keep the block
                 rb_inc(my_context->db_sizes, block->x64_size, block->x64_size+1);
+                // Register with S3-FIFO eviction manager
+                S3FIFO_cache_write(block);
             }
         }
     }
-    if(need_lock)
+    if(need_lock) {
         mutex_unlock(&my_context->mutex_dyndump);
+    }
     pthread_sigmask(SIG_SETMASK, &old_sig, NULL);
 
     dynarec_log(LOG_DEBUG, "%04d| --- DynaRec Block %p created @%p:%p (%p, 0x%x bytes)\n", GetTID(), block, (void*)addr, (void*)(addr+((block)?block->x64_size:1)-1), (block)?block->block:0, (block)?block->size:0);

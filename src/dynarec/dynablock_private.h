@@ -16,7 +16,10 @@ typedef struct dynablock_s {
     void*           actual_block;   // the actual start of the block (so block-sizeof(void*))
     struct dynablock_s*    previous;   // a previous block that might need to be freed
     uint32_t        in_used;// will be 0 if not in_used, >0 if used be some code
-    uint32_t        tick;    // last "tick" when dynablock was run
+    uint32_t        hot;    // simple counter on how many time the block is run (capped at 3 for S3-FIFO)
+    struct dynablock_s* s3fifo_prev;  // prev in S3FIFO queue
+    struct dynablock_s* s3fifo_next;  // next in S3FIFO queue
+    void*               s3fifo_queue; // NULL=none, or pointer to queue
     void*           x64_addr;
     uintptr_t       x64_size;
     size_t          native_size;

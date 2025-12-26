@@ -46,6 +46,7 @@ static inline uint32_t next_power_of_2(uint32_t v) {
     return 1U << (32 - __builtin_clz(v - 1));
 }
 
+
 typedef struct {
     dynablock_t* head;
     dynablock_t* tail;
@@ -154,6 +155,10 @@ static void s3fifo_init(uint32_t capacity) {
     s3fifo.ghost.head = 0;
 
     s3fifo.initialized = 1;
+
+    printf("[S3FIFO] INIT: capacity=%u small_cap=%u main_cap=%u in_used_cap=%u ghost_cap=%u\n",
+        capacity, s3fifo.small_queue.capacity, s3fifo.main_queue.capacity,
+        s3fifo.in_used_queue.capacity, ghost_cap);
 }
 
 static void s3fifo_fini(void) {
@@ -170,6 +175,11 @@ static void s3fifo_fini(void) {
 static void s3fifo_recheck_in_used_queue(void) {
     if (s3fifo.in_used_queue.count == 0) return;
 
+    uint32_t initial_count = s3fifo.in_used_queue.count;
+    uint32_t moved_to_main = 0, moved_to_small = 0, removed_gone = 0, still_in_used = 0;
+
+    printf("[S3FIFO] RECHECK_IN_USED: count=%u\n", initial_count);
+
     dynablock_t* db = s3fifo.in_used_queue.head;
 
     while (db) {
@@ -178,6 +188,7 @@ static void s3fifo_recheck_in_used_queue(void) {
         if (db->gone) {
             s3fifo_remove(&s3fifo.in_used_queue, db);
             db->s3fifo_queue = NULL;
+            removed_gone++;
         }
         else if (native_lock_get_d(&db->in_used) == 0) {
             // Block is now idle - route based on hot counter to preserve hot block status
@@ -185,21 +196,32 @@ static void s3fifo_recheck_in_used_queue(void) {
             uint32_t freq = native_lock_get_d(&db->hot);
             if (freq >= 2) {
                 // Hot block - return to main queue (protected)
+                printf("[S3FIFO]   block %p: idle, hot=%u -> MAIN\n", (void*)db->x64_addr, freq);
                 db->s3fifo_queue = &s3fifo.main_queue;
                 s3fifo_push(&s3fifo.main_queue, db);
+                moved_to_main++;
             } else {
                 // Cold/warm block - return to small queue (probationary)
+                printf("[S3FIFO]   block %p: idle, hot=%u -> SMALL\n", (void*)db->x64_addr, freq);
                 db->s3fifo_queue = &s3fifo.small_queue;
                 s3fifo_push(&s3fifo.small_queue, db);
+                moved_to_small++;
             }
+        } else {
+            still_in_used++;
         }
 
         db = next;
     }
+
+    printf("[S3FIFO] RECHECK_IN_USED: done, main=%u small=%u gone=%u busy=%u\n",
+        moved_to_main, moved_to_small, removed_gone, still_in_used);
 }
 
 static size_t s3fifo_try_evict_from_small(void) {
     int max_iterations = s3fifo.small_queue.count;
+
+    printf("[S3FIFO] EVICT_SMALL: count=%d\n", max_iterations);
 
     for (int i = 0; i < max_iterations; i++) {
         dynablock_t* db = s3fifo_pop(&s3fifo.small_queue);
@@ -212,11 +234,14 @@ static size_t s3fifo_try_evict_from_small(void) {
 
         if (native_lock_get_d(&db->in_used) != 0) {
             // Move to in_used_queue instead of pushing back to small
+            printf("[S3FIFO]   block %p: IN_USED -> in_used_queue\n", (void*)db->x64_addr);
             db->s3fifo_queue = &s3fifo.in_used_queue;
             s3fifo_push(&s3fifo.in_used_queue, db);
 
             // If in_used_queue is full, recheck it to move idle blocks back
             if (s3fifo.in_used_queue.count >= s3fifo.in_used_queue.capacity) {
+                printf("[S3FIFO]   in_used_queue FULL (%u >= %u)\n",
+                    s3fifo.in_used_queue.count, s3fifo.in_used_queue.capacity);
                 s3fifo_recheck_in_used_queue();
             }
             continue;
@@ -224,6 +249,7 @@ static size_t s3fifo_try_evict_from_small(void) {
 
         uint32_t freq = native_lock_get_d(&db->hot);
         if (freq >= 2) {
+            printf("[S3FIFO]   block %p: hot=%u, PROMOTE\n", (void*)db->x64_addr, freq);
             db->hot = 0;
             db->s3fifo_queue = &s3fifo.main_queue;
             s3fifo_push(&s3fifo.main_queue, db);
@@ -231,16 +257,20 @@ static size_t s3fifo_try_evict_from_small(void) {
         }
 
         size_t block_size = db->x64_size;
+        printf("[S3FIFO]   block %p: hot=%u, EVICT\n", (void*)db->x64_addr, freq);
         s3fifo_ghost_push((uintptr_t)db->x64_addr);
         db->s3fifo_queue = NULL;
         FreeDynablock(db, 0, 1);
         return block_size ? block_size : 1;
     }
+    printf("[S3FIFO] EVICT_SMALL: no evictable block\n");
     return 0;
 }
 
 static size_t s3fifo_try_evict_from_main(void) {
     int max_iterations = s3fifo.main_queue.count;
+
+    printf("[S3FIFO] EVICT_MAIN: count=%d\n", max_iterations);
 
     for (int i = 0; i < max_iterations; i++) {
         dynablock_t* db = s3fifo_pop(&s3fifo.main_queue);
@@ -253,11 +283,14 @@ static size_t s3fifo_try_evict_from_main(void) {
 
         if (native_lock_get_d(&db->in_used) != 0) {
             // Move to in_used_queue instead of pushing back to main
+            printf("[S3FIFO]   block %p: IN_USED -> in_used_queue\n", (void*)db->x64_addr);
             db->s3fifo_queue = &s3fifo.in_used_queue;
             s3fifo_push(&s3fifo.in_used_queue, db);
 
             // If in_used_queue is full, recheck it to move idle blocks back
             if (s3fifo.in_used_queue.count >= s3fifo.in_used_queue.capacity) {
+                printf("[S3FIFO]   in_used_queue FULL (%u >= %u)\n",
+                    s3fifo.in_used_queue.count, s3fifo.in_used_queue.capacity);
                 s3fifo_recheck_in_used_queue();
             }
             continue;
@@ -271,10 +304,12 @@ static size_t s3fifo_try_evict_from_main(void) {
         }
 
         size_t block_size = db->x64_size;
+        printf("[S3FIFO]   block %p: hot=0, EVICT\n", (void*)db->x64_addr);
         db->s3fifo_queue = NULL;
         FreeDynablock(db, 0, 1);
         return block_size ? block_size : 1;
     }
+    printf("[S3FIFO] EVICT_MAIN: no evictable block\n");
     return 0;
 }
 
@@ -285,8 +320,12 @@ void S3FIFO_on_block_created(dynablock_t* db) {
     // Decide target queue based on ghost check:
     // - If address in ghost queue: this is a re-access, goes to main (hot)
     // - Otherwise: new address, goes to small (probationary)
-    s3fifo_queue_t* target = s3fifo_ghost_pop((uintptr_t)db->x64_addr)
-        ? &s3fifo.main_queue : &s3fifo.small_queue;
+    int ghost_hit = s3fifo_ghost_pop((uintptr_t)db->x64_addr);
+    s3fifo_queue_t* target = ghost_hit ? &s3fifo.main_queue : &s3fifo.small_queue;
+
+    printf("[S3FIFO] BLOCK_CREATED: %p ghost=%d -> %s (small=%u main=%u in_used=%u)\n",
+        (void*)db->x64_addr, ghost_hit, ghost_hit ? "MAIN" : "SMALL",
+        s3fifo.small_queue.count, s3fifo.main_queue.count, s3fifo.in_used_queue.count);
 
     // Capacity check and eviction happens in AllocDynarecMap BEFORE allocation
     // So we just add the block to the queue here
@@ -296,6 +335,10 @@ void S3FIFO_on_block_created(dynablock_t* db) {
 
 void S3FIFO_on_block_freed(dynablock_t* db) {
     if (!s3fifo.initialized || !db || !db->s3fifo_queue) return;
+    const char* queue_name = (db->s3fifo_queue == &s3fifo.small_queue) ? "SMALL" :
+                             (db->s3fifo_queue == &s3fifo.main_queue) ? "MAIN" :
+                             (db->s3fifo_queue == &s3fifo.in_used_queue) ? "IN_USED" : "UNKNOWN";
+    printf("[S3FIFO] BLOCK_FREED: %p from %s\n", (void*)db->x64_addr, queue_name);
     s3fifo_remove(db->s3fifo_queue, db);
     db->s3fifo_queue = NULL;
 }
@@ -313,7 +356,15 @@ int PurgeDynarecMap(void) {
     uint32_t total_count = s3fifo.small_queue.count + s3fifo.main_queue.count + s3fifo.in_used_queue.count;
     int evicted = 0;
 
+    printf("[S3FIFO] PURGE: count=%u capacity=%u (small=%u/%u main=%u/%u in_used=%u)\n",
+        total_count, total_capacity,
+        s3fifo.small_queue.count, s3fifo.small_queue.capacity,
+        s3fifo.main_queue.count, s3fifo.main_queue.capacity,
+        s3fifo.in_used_queue.count);
+
     while (total_count >= total_capacity) {
+        printf("[S3FIFO] PURGE_LOOP: count=%u >= capacity=%u, evicting...\n", total_count, total_capacity);
+
         // Recheck in_used_queue to move idle blocks back to small
         if (s3fifo.in_used_queue.count > 0) {
             s3fifo_recheck_in_used_queue();
@@ -337,12 +388,14 @@ int PurgeDynarecMap(void) {
                 if (total_capacity + increase > max_capacity) {
                     increase = max_capacity - total_capacity;
                 }
+                printf("[S3FIFO] PURGE: can't evict, growing capacity by %u\n", increase);
                 // Add to main queue capacity
                 s3fifo.main_queue.capacity += increase;
                 total_capacity += increase;
                 continue;  // Re-check with new capacity
             }
             // At max capacity and can't evict - must allocate anyway
+            printf("[S3FIFO] PURGE: can't evict, at max capacity, breaking\n");
             break;
         }
 

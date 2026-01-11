@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <signal.h>
+#include <time.h>
 
 #include "os.h"
 #include "debug.h"
@@ -325,6 +326,18 @@ static dynablock_t* internalDBGetBlock(x64emu_t* emu, uintptr_t addr, uintptr_t 
     pthread_sigmask(SIG_SETMASK, &old_sig, NULL);
 
     dynarec_log(LOG_DEBUG, "%04d| --- DynaRec Block %p created @%p:%p (%p, 0x%x bytes)\n", GetTID(), block, (void*)addr, (void*)(addr+((block)?block->x64_size:1)-1), (block)?block->block:0, (block)?block->size:0);
+
+    // Print block creation with timestamp
+    if(block) {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        printf("[%ld.%09ld] DynaBlock created: x64_addr=%p size=0x%lx native_block=%p native_size=0x%x\n",
+               (long)ts.tv_sec, ts.tv_nsec,
+               block->x64_addr,
+               (unsigned long)block->x64_size,
+               block->block,
+               block->size);
+    }
 
     return block;
 }

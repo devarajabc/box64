@@ -113,6 +113,7 @@ void FreeInvalidDynablock(dynablock_t* db, int need_lock)
         uintptr_t db_size = db->x64_size;
         if(need_lock)
             mutex_lock(&my_context->mutex_dyndump);
+        S3FIFO_on_block_freed(db);
         if(db_size && my_context && BOX64ENV(dynarec_dirty)) {
             uint32_t n = rb_dec(my_context->db_sizes, db_size, db_size+1);
             if(!n && (db_size >= my_context->max_db_size)) {
@@ -137,7 +138,6 @@ void FreeDynablock(dynablock_t* db, int need_lock, int need_remove)
             setJumpTableDefault64(db->x64_addr);
         if(need_lock)
             mutex_lock(&my_context->mutex_dyndump);
-        // Remove from S3-FIFO queues if tracked (must be under lock)
         S3FIFO_on_block_freed(db);
         dynarec_log(LOG_DEBUG, " -- FreeDyrecMap(%p, %d)\n", db->actual_block, db->size);
         db->done = 0;
@@ -169,8 +169,6 @@ void MarkDynablock(dynablock_t* db)
             db = getDB((uintptr_t)old->x64_addr);
             if(!old->gone && db!=old) {
                 printf_log(LOG_INFO, "Warning, couldn't mark block as dirty for %p, block=%p, current_block=%p\n", old->x64_addr, old, db);
-                // the block is lost, need to invalidate it...
-                S3FIFO_on_block_freed(old);
                 old->gone = 1;
                 old->done = 0;
                 if(!db || db->previous)

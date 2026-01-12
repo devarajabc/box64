@@ -145,9 +145,13 @@ void SetTraceEmu(uintptr_t start, uintptr_t end)
 
 static void internalFreeX64(x64emu_t* emu)
 {
+    printf_log(LOG_DEBUG, "%04d|internalFreeX64: start emu=%p\n", GetTID(), emu);
     if(emu && emu->stack2free) {
+        printf_log(LOG_DEBUG, "%04d|internalFreeX64: munmap(%p, %zu)\n", GetTID(), emu->stack2free, emu->size_stack);
         munmap(emu->stack2free, emu->size_stack);
+        printf_log(LOG_DEBUG, "%04d|internalFreeX64: freeProtection\n", GetTID());
         freeProtection((uintptr_t)emu->stack2free, emu->size_stack);
+        printf_log(LOG_DEBUG, "%04d|internalFreeX64: freeProtection done\n", GetTID());
     }
     #ifdef BOX32
     if(emu->res_state_32)
@@ -155,9 +159,11 @@ static void internalFreeX64(x64emu_t* emu)
     emu->res_state_32 = NULL;
     #endif
     if(emu->tlsdata) {
+        printf_log(LOG_DEBUG, "%04d|internalFreeX64: free_tlsdatasize\n", GetTID());
         free_tlsdatasize(emu->tlsdata);
         emu->tlsdata = NULL;
     }
+    printf_log(LOG_DEBUG, "%04d|internalFreeX64: done\n", GetTID());
 }
 
 EXPORTDYN
@@ -167,15 +173,20 @@ void FreeX64Emu(x64emu_t **emu)
         return;
     printf_log(LOG_DEBUG, "%04d|Free a X86_64 Emu (%p)\n", GetTID(), *emu);
 
+    printf_log(LOG_DEBUG, "%04d|FreeX64Emu: before test.emu check\n", GetTID());
     if((*emu)->test.emu) {
+        printf_log(LOG_DEBUG, "%04d|FreeX64Emu: freeing test.emu\n", GetTID());
         (*emu)->test.emu->tlsdata = NULL; // unlink the tlsdata first
         internalFreeX64((*emu)->test.emu);
         actual_free((*emu)->test.emu);
         (*emu)->test.emu = NULL;
     }
+    printf_log(LOG_DEBUG, "%04d|FreeX64Emu: calling internalFreeX64\n", GetTID());
     internalFreeX64(*emu);
 
+    printf_log(LOG_DEBUG, "%04d|FreeX64Emu: calling actual_free\n", GetTID());
     actual_free(*emu);
+    printf_log(LOG_DEBUG, "%04d|FreeX64Emu: done\n", GetTID());
     *emu = NULL;
 }
 

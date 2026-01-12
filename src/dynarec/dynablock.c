@@ -114,8 +114,11 @@ void FreeInvalidDynablock(dynablock_t* db, int need_lock)
         printf_log(LOG_DEBUG, "FreeInvalidDynablock(%p) x64=%p gone=%d prev=%p lock=%d\n",
                    db, db->x64_addr, db->gone, db->previous, need_lock);
         uintptr_t db_size = db->x64_size;
-        if(need_lock)
+        if(need_lock) {
+            printf_log(LOG_DEBUG, "FreeInvalidDynablock(%p): acquiring mutex_dyndump\n", db->x64_addr);
             mutex_lock(&my_context->mutex_dyndump);
+            printf_log(LOG_DEBUG, "FreeInvalidDynablock(%p): got mutex_dyndump\n", db->x64_addr);
+        }
         S3FIFO_on_block_freed(db);
         if(db_size && my_context && BOX64ENV(dynarec_dirty)) {
             uint32_t n = rb_dec(my_context->db_sizes, db_size, db_size+1);
@@ -131,8 +134,10 @@ void FreeInvalidDynablock(dynablock_t* db, int need_lock)
         }
         printf_log(LOG_DEBUG, "FreeInvalidDynablock(%p) -> FreeDynarecMap\n", db->x64_addr);
         FreeDynarecMap((uintptr_t)db->actual_block);    // will also free db
-        if(need_lock)
+        if(need_lock) {
+            printf_log(LOG_DEBUG, "FreeInvalidDynablock(%p): releasing mutex_dyndump\n", db->x64_addr);
             mutex_unlock(&my_context->mutex_dyndump);
+        }
     }
 }
 
@@ -148,8 +153,11 @@ void FreeDynablock(dynablock_t* db, int need_lock, int need_remove)
         // remove jumptable without waiting
         if(need_remove)
             setJumpTableDefault64(db->x64_addr);
-        if(need_lock)
+        if(need_lock) {
+            printf_log(LOG_DEBUG, "FreeDynablock(%p): acquiring mutex_dyndump\n", db->x64_addr);
             mutex_lock(&my_context->mutex_dyndump);
+            printf_log(LOG_DEBUG, "FreeDynablock(%p): got mutex_dyndump\n", db->x64_addr);
+        }
         S3FIFO_on_block_freed(db);
         dynarec_log(LOG_DEBUG, " -- FreeDyrecMap(%p, %d)\n", db->actual_block, db->size);
         db->done = 0;
@@ -168,8 +176,10 @@ void FreeDynablock(dynablock_t* db, int need_lock, int need_remove)
         }
         printf_log(LOG_DEBUG, "FreeDynablock(%p) -> FreeDynarecMap\n", db->x64_addr);
         FreeDynarecMap((uintptr_t)db->actual_block);    // will also free db
-        if(need_lock)
+        if(need_lock) {
+            printf_log(LOG_DEBUG, "FreeDynablock(%p): releasing mutex_dyndump\n", db->x64_addr);
             mutex_unlock(&my_context->mutex_dyndump);
+        }
     }
 }
 

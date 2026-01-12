@@ -94,7 +94,10 @@ static dynablock_t* s3fifo_pop(s3fifo_queue_t* q) {
 
 static void s3fifo_remove(s3fifo_queue_t* q, dynablock_t* db) {
     if (!db || db->s3fifo_queue != q) return;
-    if (q->count == 0) return;
+    if (q->count == 0) {
+        db->s3fifo_queue = NULL;
+        return;
+    }
     dynablock_t** next_indirect = db->s3fifo_prev ? &db->s3fifo_prev->s3fifo_next : &q->head;
     dynablock_t** prev_indirect = db->s3fifo_next ? &db->s3fifo_next->s3fifo_prev : &q->tail;
     *next_indirect = db->s3fifo_next;
@@ -106,7 +109,7 @@ static void s3fifo_remove(s3fifo_queue_t* q, dynablock_t* db) {
 
 static void s3fifo_ghost_push(uintptr_t x64_addr) {
     s3fifo_ghost_t* g = &s3fifo.ghost;
-    if (!g->ring) return;
+    if (!g->ring || !g->hash) return;
     if (kh_get(ghost, g->hash, x64_addr) != kh_end(g->hash)) return;
 
     uintptr_t old = g->ring[g->head];
@@ -119,6 +122,7 @@ static void s3fifo_ghost_push(uintptr_t x64_addr) {
     g->ring[g->head] = x64_addr;
     int ret;
     khiter_t k = kh_put(ghost, g->hash, x64_addr, &ret);
+    if (ret < 0) return;
     kh_value(g->hash, k) = g->head;
     g->head = (g->head + 1) & g->mask;
 }
@@ -173,7 +177,7 @@ static size_t s3fifo_try_evict(int from_main) {
 
         uint32_t in_used = native_lock_get_d(&db->in_used);
         if (in_used != 0) {
-            if (in_used >= 2) {
+            if (in_used > 3) {
                 db->s3fifo_queue = S3FIFO_QUEUE_FLOATING;
             } else {
                 s3fifo_push(queue, db);
@@ -185,7 +189,7 @@ static size_t s3fifo_try_evict(int from_main) {
 
         if (from_main) {
             if (freq >= 1) {
-                db->hot = freq - 1;
+                native_lock_storeb(&db->hot, freq - 1);
                 s3fifo_push(&s3fifo.main_queue, db);
                 continue;
             }
@@ -195,11 +199,9 @@ static size_t s3fifo_try_evict(int from_main) {
             return block_size ? block_size : 1;
         } else {
             if (freq >= 2) {
-                db->hot = 0;
+                native_lock_storeb(&db->hot, 0);
                 db->s3fifo_queue = &s3fifo.main_queue;
                 s3fifo_push(&s3fifo.main_queue, db);
-                if (s3fifo.main_queue.count >= s3fifo.main_queue.capacity)
-                    s3fifo_try_evict(1);
                 continue;
             }
             size_t block_size = db->x64_size;
@@ -215,6 +217,7 @@ static size_t s3fifo_try_evict(int from_main) {
 void S3FIFO_on_block_created(dynablock_t* db) {
     if (!s3fifo.initialized || !db || !db->done) return;
     if (db->s3fifo_queue) return;
+    db->hot = 0;
     int ghost_hit = s3fifo_ghost_pop((uintptr_t)db->x64_addr);
     s3fifo_queue_t* target = ghost_hit ? &s3fifo.main_queue : &s3fifo.small_queue;
     db->s3fifo_queue = target;

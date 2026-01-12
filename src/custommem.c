@@ -93,11 +93,19 @@ static dynablock_t* s3fifo_pop(s3fifo_queue_t* q) {
 }
 
 static void s3fifo_remove(s3fifo_queue_t* q, dynablock_t* db) {
-    if (!db || db->s3fifo_queue != q) return;
+    if (!db || db->s3fifo_queue != q) {
+        printf_log(LOG_DEBUG, "S3FIFO: remove %p SKIP (queue mismatch db->q=%p q=%p)\n",
+                   db ? db->x64_addr : NULL, db ? db->s3fifo_queue : NULL, q);
+        return;
+    }
     if (q->count == 0) {
+        printf_log(LOG_DEBUG, "S3FIFO: remove %p SKIP (count=0)\n", db->x64_addr);
         db->s3fifo_queue = NULL;
         return;
     }
+    const char* qname = (q == &s3fifo.small_queue) ? "SMALL" : "MAIN";
+    printf_log(LOG_DEBUG, "S3FIFO: remove %p from %s (count %d->%d)\n",
+               db->x64_addr, qname, q->count, q->count - 1);
     dynablock_t** next_indirect = db->s3fifo_prev ? &db->s3fifo_prev->s3fifo_next : &q->head;
     dynablock_t** prev_indirect = db->s3fifo_next ? &db->s3fifo_next->s3fifo_prev : &q->tail;
     *next_indirect = db->s3fifo_next;
@@ -234,9 +242,21 @@ void S3FIFO_on_block_created(dynablock_t* db) {
 }
 
 void S3FIFO_on_block_freed(dynablock_t* db) {
-    if (!s3fifo.initialized || !db || !db->s3fifo_queue) return;
-    if (db->s3fifo_queue != S3FIFO_QUEUE_FLOATING)
+    if (!s3fifo.initialized || !db) {
+        printf_log(LOG_DEBUG, "S3FIFO: on_block_freed SKIP (init=%d db=%p)\n",
+                   s3fifo.initialized, db);
+        return;
+    }
+    if (!db->s3fifo_queue) {
+        printf_log(LOG_DEBUG, "S3FIFO: on_block_freed %p SKIP (not in queue)\n", db->x64_addr);
+        return;
+    }
+    if (db->s3fifo_queue == S3FIFO_QUEUE_FLOATING) {
+        printf_log(LOG_DEBUG, "S3FIFO: on_block_freed %p was FLOATING\n", db->x64_addr);
+    } else {
+        printf_log(LOG_DEBUG, "S3FIFO: on_block_freed %p (gone=%d)\n", db->x64_addr, db->gone);
         s3fifo_remove(db->s3fifo_queue, db);
+    }
     db->s3fifo_queue = NULL;
 }
 
@@ -245,10 +265,15 @@ int PurgeDynarecMap(void) {
 
     size_t freed = 0;
     if (s3fifo.small_queue.count >= s3fifo.small_queue.capacity) {
+        printf_log(LOG_DEBUG, "S3FIFO: Purge SMALL full (%d/%d) MAIN(%d/%d)\n",
+                   s3fifo.small_queue.count, s3fifo.small_queue.capacity,
+                   s3fifo.main_queue.count, s3fifo.main_queue.capacity);
         freed = s3fifo_try_evict(0);
         if (freed && s3fifo.main_queue.count >= s3fifo.main_queue.capacity)
             s3fifo_try_evict(1);
     } else if (s3fifo.main_queue.count >= s3fifo.main_queue.capacity) {
+        printf_log(LOG_DEBUG, "S3FIFO: Purge MAIN full (%d/%d)\n",
+                   s3fifo.main_queue.count, s3fifo.main_queue.capacity);
         freed = s3fifo_try_evict(1);
     } else {
         return 0;

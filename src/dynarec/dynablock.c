@@ -107,9 +107,12 @@ dynablock_t* SwitchDynablock(dynablock_t* db, int need_lock)
 void FreeInvalidDynablock(dynablock_t* db, int need_lock)
 {
     if(db) {
-        if(!db->gone)
-            return; // already in the process of deletion!
-        dynarec_log(LOG_DEBUG, "FreeInvalidDynablock(%p), db->block=%p x64=%p:%p already gone=%d\n", db, db->block, db->x64_addr, db->x64_addr+db->x64_size-1, db->gone);
+        if(!db->gone) {
+            printf_log(LOG_DEBUG, "FreeInvalidDynablock(%p) SKIP gone=0\n", db->x64_addr);
+            return; // not marked gone, skip
+        }
+        printf_log(LOG_DEBUG, "FreeInvalidDynablock(%p) x64=%p gone=%d prev=%p lock=%d\n",
+                   db, db->x64_addr, db->gone, db->previous, need_lock);
         uintptr_t db_size = db->x64_size;
         if(need_lock)
             mutex_lock(&my_context->mutex_dyndump);
@@ -122,8 +125,11 @@ void FreeInvalidDynablock(dynablock_t* db, int need_lock)
             }
         }
         // Handle previous chain (same as FreeDynablock)
-        if(db->previous)
+        if(db->previous) {
+            printf_log(LOG_DEBUG, "FreeInvalidDynablock(%p) -> chain to prev %p\n", db->x64_addr, db->previous->x64_addr);
             FreeInvalidDynablock(db->previous, 0);
+        }
+        printf_log(LOG_DEBUG, "FreeInvalidDynablock(%p) -> FreeDynarecMap\n", db->x64_addr);
         FreeDynarecMap((uintptr_t)db->actual_block);    // will also free db
         if(need_lock)
             mutex_unlock(&my_context->mutex_dyndump);
@@ -133,9 +139,12 @@ void FreeInvalidDynablock(dynablock_t* db, int need_lock)
 void FreeDynablock(dynablock_t* db, int need_lock, int need_remove)
 {
     if(db) {
-        if(db->gone)
+        if(db->gone) {
+            printf_log(LOG_DEBUG, "FreeDynablock(%p) SKIP already gone\n", db->x64_addr);
             return; // already in the process of deletion!
-        dynarec_log(LOG_DEBUG, "FreeDynablock(%p), db->block=%p x64=%p:%p already gone=%d\n", db, db->block, db->x64_addr, db->x64_addr+db->x64_size-1, db->gone);
+        }
+        printf_log(LOG_DEBUG, "FreeDynablock(%p) x64=%p prev=%p lock=%d remove=%d\n",
+                   db, db->x64_addr, db->previous, need_lock, need_remove);
         // remove jumptable without waiting
         if(need_remove)
             setJumpTableDefault64(db->x64_addr);
@@ -153,8 +162,11 @@ void FreeDynablock(dynablock_t* db, int need_lock, int need_remove)
                 dynarec_log(LOG_INFO, "BOX64 Dynarec: lower max_db=%d\n", my_context->max_db_size);
             }
         }
-        if(db->previous)
+        if(db->previous) {
+            printf_log(LOG_DEBUG, "FreeDynablock(%p) -> chain to prev %p\n", db->x64_addr, db->previous->x64_addr);
             FreeInvalidDynablock(db->previous, 0);
+        }
+        printf_log(LOG_DEBUG, "FreeDynablock(%p) -> FreeDynarecMap\n", db->x64_addr);
         FreeDynarecMap((uintptr_t)db->actual_block);    // will also free db
         if(need_lock)
             mutex_unlock(&my_context->mutex_dyndump);
@@ -166,20 +178,23 @@ void FreeDynablock(dynablock_t* db, int need_lock, int need_remove)
 void MarkDynablock(dynablock_t* db)
 {
     if(db) {
-        dynarec_log(LOG_DEBUG, "MarkDynablock %p %p-%p\n", db, db->x64_addr, db->x64_addr+db->x64_size-1);
+        printf_log(LOG_DEBUG, "MarkDynablock(%p) x64=%p gone=%d\n", db, db->x64_addr, db->gone);
         if(!setJumpTableIfRef64(db->x64_addr, db->jmpnext, db->block)) {
             dynablock_t* old = db;
             db = getDB((uintptr_t)old->x64_addr);
             if(!old->gone && db!=old) {
-                printf_log(LOG_INFO, "Warning, couldn't mark block as dirty for %p, block=%p, current_block=%p\n", old->x64_addr, old, db);
+                printf_log(LOG_DEBUG, "MarkDynablock: old=%p new=%p, old->gone=1\n", old->x64_addr, db ? db->x64_addr : NULL);
                 old->gone = 1;
                 old->done = 0;
-                if(!db || db->previous)
+                if(!db || db->previous) {
+                    printf_log(LOG_DEBUG, "MarkDynablock: FreeInvalidDynablock(old=%p)\n", old->x64_addr);
                     FreeInvalidDynablock(old, 1);
-                else
+                } else {
+                    printf_log(LOG_DEBUG, "MarkDynablock: db(%p)->previous = old(%p)\n", db->x64_addr, old->x64_addr);
                     db->previous = old;
+                }
             }
-        } 
+        }
         #ifdef ARCH_NOP
         else if(db->callret_size) {
             // mark all callrets to UDF

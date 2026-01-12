@@ -178,6 +178,7 @@ static size_t s3fifo_try_evict(int from_main) {
         uint32_t in_used = native_lock_get_d(&db->in_used);
         if (in_used != 0) {
             if (in_used > 3) {
+                dynarec_log(LOG_DEBUG, "S3FIFO: %p FLOATING (in_used=%d)\n", db->x64_addr, in_used);
                 db->s3fifo_queue = S3FIFO_QUEUE_FLOATING;
             } else {
                 s3fifo_push(queue, db);
@@ -194,17 +195,20 @@ static size_t s3fifo_try_evict(int from_main) {
                 continue;
             }
             size_t block_size = db->x64_size;
+            dynarec_log(LOG_DEBUG, "S3FIFO: %p evict MAIN sz=%zu\n", db->x64_addr, block_size);
             db->s3fifo_queue = NULL;
             FreeDynablock(db, 0, 1);
             return block_size ? block_size : 1;
         } else {
             if (freq >= 2) {
+                dynarec_log(LOG_DEBUG, "S3FIFO: %p SMALL->MAIN (hot=%d)\n", db->x64_addr, freq);
                 native_lock_storeb(&db->hot, 0);
                 db->s3fifo_queue = &s3fifo.main_queue;
                 s3fifo_push(&s3fifo.main_queue, db);
                 continue;
             }
             size_t block_size = db->x64_size;
+            dynarec_log(LOG_DEBUG, "S3FIFO: %p evict SMALL sz=%zu\n", db->x64_addr, block_size);
             s3fifo_ghost_push((uintptr_t)db->x64_addr);
             db->s3fifo_queue = NULL;
             FreeDynablock(db, 0, 1);
@@ -220,6 +224,7 @@ void S3FIFO_on_block_created(dynablock_t* db) {
     db->hot = 0;
     int ghost_hit = s3fifo_ghost_pop((uintptr_t)db->x64_addr);
     s3fifo_queue_t* target = ghost_hit ? &s3fifo.main_queue : &s3fifo.small_queue;
+    dynarec_log(LOG_DEBUG, "S3FIFO: %p created->%s\n", db->x64_addr, ghost_hit ? "MAIN" : "SMALL");
     db->s3fifo_queue = target;
     s3fifo_push(target, db);
 }

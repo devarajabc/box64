@@ -121,6 +121,9 @@ void FreeInvalidDynablock(dynablock_t* db, int need_lock)
                 dynarec_log(LOG_INFO, "BOX64 Dynarec: lower max_db=%d\n", my_context->max_db_size);
             }
         }
+        // Handle previous chain (same as FreeDynablock)
+        if(db->previous)
+            FreeInvalidDynablock(db->previous, 0);
         FreeDynarecMap((uintptr_t)db->actual_block);    // will also free db
         if(need_lock)
             mutex_unlock(&my_context->mutex_dyndump);

@@ -187,6 +187,10 @@ static size_t s3fifo_try_evict(int from_main) {
         }
 
         uint32_t freq = native_lock_get_d(&db->hot);
+        if (freq > 3) {
+            freq = 3;
+            native_lock_storeb(&db->hot, 3);  // Cap garbage value
+        }
 
         if (from_main) {
             if (freq >= 1) {

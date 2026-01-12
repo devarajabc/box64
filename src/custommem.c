@@ -170,11 +170,14 @@ static void s3fifo_fini(void) {
     memset(&s3fifo, 0, sizeof(s3fifo));
 }
 
+// Reference S3-FIFO uses while(!has_evicted) to guarantee eviction
+// We add max_iterations as safety against infinite loops (all blocks in_used)
 static size_t s3fifo_try_evict(int from_main) {
     s3fifo_queue_t* queue = from_main ? &s3fifo.main_queue : &s3fifo.small_queue;
-    int max_iterations = queue->count;
+    int has_evicted = 0;
+    int max_iterations = queue->count * 2;  // Safety limit
 
-    for (int i = 0; i < max_iterations; i++) {
+    while (!has_evicted && queue->count > 0 && max_iterations-- > 0) {
         dynablock_t* db = s3fifo_pop(queue);
         if (!db) break;
 
@@ -201,6 +204,7 @@ static size_t s3fifo_try_evict(int from_main) {
         }
 
         if (from_main) {
+            // Reference S3-FIFO: MIN(freq, 3) - 1, reinsert if > 0
             if (freq >= 1) {
                 native_lock_storeb(&db->hot, freq - 1);
                 s3fifo_push(&s3fifo.main_queue, db);
@@ -210,11 +214,12 @@ static size_t s3fifo_try_evict(int from_main) {
             printf_log(LOG_DEBUG, "S3FIFO: %p evict MAIN sz=%zu\n", db->x64_addr, block_size);
             db->s3fifo_queue = NULL;
             FreeDynablock(db, 0, 1);
+            has_evicted = 1;
             return block_size ? block_size : 1;
         } else {
             if (freq >= 2) {
-                printf_log(LOG_DEBUG, "S3FIFO: %p SMALL->MAIN (hot=%d)\n", db->x64_addr, freq);
-                native_lock_storeb(&db->hot, 0);
+                // Reference S3-FIFO: freq is NOT reset on promotion - keep it!
+                printf_log(LOG_DEBUG, "S3FIFO: %p SMALL->MAIN (hot=%d, kept)\n", db->x64_addr, freq);
                 db->s3fifo_queue = &s3fifo.main_queue;
                 s3fifo_push(&s3fifo.main_queue, db);
                 continue;
@@ -224,6 +229,7 @@ static size_t s3fifo_try_evict(int from_main) {
             s3fifo_ghost_push((uintptr_t)db->x64_addr);
             db->s3fifo_queue = NULL;
             FreeDynablock(db, 0, 1);
+            has_evicted = 1;
             return block_size ? block_size : 1;
         }
     }
@@ -264,19 +270,29 @@ int PurgeDynarecMap(void) {
     if (!s3fifo.initialized) return 0;
 
     size_t freed = 0;
-    if (s3fifo.small_queue.count >= s3fifo.small_queue.capacity) {
+    // Reference S3-FIFO eviction order:
+    // if (main > capacity || small == 0) evict_main else evict_small
+    //
+    // Priority: MAIN first if over capacity (prevents unbounded MAIN growth)
+    if (s3fifo.main_queue.count > s3fifo.main_queue.capacity ||
+        s3fifo.small_queue.count == 0) {
+        if (s3fifo.main_queue.count > 0) {
+            printf_log(LOG_DEBUG, "S3FIFO: Purge MAIN priority (main=%d/%d small=%d/%d)\n",
+                       s3fifo.main_queue.count, s3fifo.main_queue.capacity,
+                       s3fifo.small_queue.count, s3fifo.small_queue.capacity);
+            freed = s3fifo_try_evict(1);
+        }
+    } else if (s3fifo.small_queue.count >= s3fifo.small_queue.capacity) {
         printf_log(LOG_DEBUG, "S3FIFO: Purge SMALL full (%d/%d) MAIN(%d/%d)\n",
                    s3fifo.small_queue.count, s3fifo.small_queue.capacity,
                    s3fifo.main_queue.count, s3fifo.main_queue.capacity);
         freed = s3fifo_try_evict(0);
-        if (freed && s3fifo.main_queue.count >= s3fifo.main_queue.capacity)
-            s3fifo_try_evict(1);
-    } else if (s3fifo.main_queue.count >= s3fifo.main_queue.capacity) {
-        printf_log(LOG_DEBUG, "S3FIFO: Purge MAIN full (%d/%d)\n",
-                   s3fifo.main_queue.count, s3fifo.main_queue.capacity);
-        freed = s3fifo_try_evict(1);
-    } else {
-        return 0;
+        // After SMALL eviction (which may promote to MAIN), check if MAIN needs eviction
+        if (s3fifo.main_queue.count > s3fifo.main_queue.capacity) {
+            printf_log(LOG_DEBUG, "S3FIFO: Purge MAIN after promotion (%d/%d)\n",
+                       s3fifo.main_queue.count, s3fifo.main_queue.capacity);
+            freed += s3fifo_try_evict(1);
+        }
     }
     return freed ? 1 : 0;
 }

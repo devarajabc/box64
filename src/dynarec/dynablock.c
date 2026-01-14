@@ -125,8 +125,8 @@ void FreeInvalidDynablock(dynablock_t* db, int need_lock)
             // ABBA DEADLOCK DETECTION: Check if we're about to create Path B of ABBA deadlock
             // Path B: mutex_prot (held) → mutex_dyndump (about to acquire)
             if(is_mutex_prot_held()) {
-                printf_log(LOG_INFO, "ABBA DEADLOCK WARNING! FreeInvalidDynablock(%p): about to acquire mutex_dyndump while mutex_prot is HELD! Thread=%ld\n",
-                           db->x64_addr, (long)pthread_self());
+                printf_log(LOG_INFO, "ABBA DEADLOCK WARNING! FreeInvalidDynablock(%p): about to acquire mutex_dyndump while mutex_prot is HELD!\n",
+                           db->x64_addr);
             }
             printf_log(LOG_DEBUG, "FreeInvalidDynablock(%p): acquiring mutex_dyndump\n", db->x64_addr);
             mutex_lock(&my_context->mutex_dyndump);
@@ -169,8 +169,8 @@ void FreeDynablock(dynablock_t* db, int need_lock, int need_remove)
         if(need_lock) {
             // ABBA DEADLOCK DETECTION: Check if we're about to create Path B of ABBA deadlock
             if(is_mutex_prot_held()) {
-                printf_log(LOG_INFO, "ABBA DEADLOCK WARNING! FreeDynablock(%p): about to acquire mutex_dyndump while mutex_prot is HELD! Thread=%ld\n",
-                           db->x64_addr, (long)pthread_self());
+                printf_log(LOG_INFO, "ABBA DEADLOCK WARNING! FreeDynablock(%p): about to acquire mutex_dyndump while mutex_prot is HELD!\n",
+                           db->x64_addr);
             }
             printf_log(LOG_DEBUG, "FreeDynablock(%p): acquiring mutex_dyndump\n", db->x64_addr);
             mutex_lock(&my_context->mutex_dyndump);

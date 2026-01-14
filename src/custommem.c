@@ -72,93 +72,38 @@ static struct {
     int initialized;
     uint32_t floating_count;  // Track blocks in FLOATING state (not evictable)
     uint32_t init_count;      // Track how many times init was called
-    // Concurrent access detection
+    // Concurrent access detection (cross-thread)
     volatile uint32_t in_push;       // Count of threads in push
     volatile uint32_t in_pop;        // Count of threads in pop
     volatile uint32_t in_remove;     // Count of threads in remove
     volatile uint32_t in_evict;      // Count of threads in evict
 } s3fifo = {0};
 
-// Linked-list integrity check: returns 0 if OK, error code if corrupt
+// Re-entry detection (same-thread, e.g., from signal handler)
+static __thread int tls_in_push = 0;
+static __thread int tls_in_pop = 0;
+static __thread int tls_in_remove = 0;
+static __thread int tls_in_evict = 0;
+static __thread int tls_in_created = 0;
+static __thread int tls_in_freed = 0;
+
+// Simple integrity check - just check head/tail consistency (no pointer walking)
+// NOTE: Full pointer walking is not thread-safe without locking
 static int s3fifo_check_queue_integrity(s3fifo_queue_t* q, const char* qname) {
     int errors = 0;
 
     // Check 1: Empty queue consistency
     if (q->count == 0) {
-        if (q->head != NULL) {
-            printf_log(LOG_INFO, "S3FIFO INTEGRITY: %s count=0 but head=%p\n", qname, q->head ? q->head->x64_addr : NULL);
-            errors++;
-        }
-        if (q->tail != NULL) {
-            printf_log(LOG_INFO, "S3FIFO INTEGRITY: %s count=0 but tail=%p\n", qname, q->tail ? q->tail->x64_addr : NULL);
+        if (q->head != NULL || q->tail != NULL) {
+            printf_log(LOG_INFO, "S3FIFO INTEGRITY: %s count=0 but head/tail not NULL\n", qname);
             errors++;
         }
         return errors;
     }
 
     // Check 2: Non-empty queue must have head and tail
-    if (q->head == NULL) {
-        printf_log(LOG_INFO, "S3FIFO INTEGRITY: %s count=%d but head=NULL\n", qname, q->count);
-        errors++;
-        return errors;  // Can't continue without head
-    }
-    if (q->tail == NULL) {
-        printf_log(LOG_INFO, "S3FIFO INTEGRITY: %s count=%d but tail=NULL\n", qname, q->count);
-        errors++;
-    }
-
-    // Check 3: Head's prev should be NULL
-    if (q->head->s3fifo_prev != NULL) {
-        printf_log(LOG_INFO, "S3FIFO INTEGRITY: %s head %p has prev=%p (should be NULL)\n",
-                   qname, q->head->x64_addr, q->head->s3fifo_prev->x64_addr);
-        errors++;
-    }
-
-    // Check 4: Tail's next should be NULL
-    if (q->tail && q->tail->s3fifo_next != NULL) {
-        printf_log(LOG_INFO, "S3FIFO INTEGRITY: %s tail %p has next=%p (should be NULL)\n",
-                   qname, q->tail->x64_addr, q->tail->s3fifo_next->x64_addr);
-        errors++;
-    }
-
-    // Check 5: Walk forward and verify count + back-pointers
-    int forward_count = 0;
-    dynablock_t* current = q->head;
-    dynablock_t* prev = NULL;
-    while (current && forward_count < q->count + 10) {  // +10 as safety limit
-        forward_count++;
-
-        // Verify back-pointer
-        if (current->s3fifo_prev != prev) {
-            printf_log(LOG_INFO, "S3FIFO INTEGRITY: %s node %p prev=%p but should be %p\n",
-                       qname, current->x64_addr,
-                       current->s3fifo_prev ? current->s3fifo_prev->x64_addr : NULL,
-                       prev ? prev->x64_addr : NULL);
-            errors++;
-        }
-
-        // Verify queue pointer
-        if (current->s3fifo_queue != q) {
-            printf_log(LOG_INFO, "S3FIFO INTEGRITY: %s node %p queue=%p but should be %p\n",
-                       qname, current->x64_addr, current->s3fifo_queue, q);
-            errors++;
-        }
-
-        prev = current;
-        current = current->s3fifo_next;
-    }
-
-    // Check 6: Forward count should match q->count
-    if (forward_count != q->count) {
-        printf_log(LOG_INFO, "S3FIFO INTEGRITY: %s forward_count=%d but count=%d\n",
-                   qname, forward_count, q->count);
-        errors++;
-    }
-
-    // Check 7: Last node should be tail
-    if (prev != q->tail) {
-        printf_log(LOG_INFO, "S3FIFO INTEGRITY: %s last_node=%p but tail=%p\n",
-                   qname, prev ? prev->x64_addr : NULL, q->tail ? q->tail->x64_addr : NULL);
+    if (q->head == NULL || q->tail == NULL) {
+        printf_log(LOG_INFO, "S3FIFO INTEGRITY: %s count=%d but head or tail is NULL\n", qname, q->count);
         errors++;
     }
 
@@ -179,17 +124,19 @@ static int s3fifo_check_all_integrity(void) {
 
 static void s3fifo_push(s3fifo_queue_t* q, dynablock_t* db) {
     const char* qname = (q == &s3fifo.small_queue) ? "SMALL" : "MAIN";
-    // CONCURRENT: Detect concurrent push/pop/remove
+
+    // RE-ENTRY: Detect same-thread re-entry (e.g., from signal handler)
+    if (tls_in_push) {
+        printf_log(LOG_INFO, "S3FIFO REENTRY: push %s while already in push!\n", qname);
+    }
+    tls_in_push = 1;
+
+    // CONCURRENT: Detect concurrent push/pop/remove (cross-thread)
     uint32_t concurrent = __atomic_add_fetch(&s3fifo.in_push, 1, __ATOMIC_SEQ_CST);
     if (concurrent > 1 || s3fifo.in_pop > 0 || s3fifo.in_remove > 0) {
-        printf_log(LOG_INFO, "S3FIFO CONCURRENT: push %p (push=%u pop=%u remove=%u evict=%u)\n",
-                   db->x64_addr, concurrent, s3fifo.in_pop, s3fifo.in_remove, s3fifo.in_evict);
+        printf_log(LOG_INFO, "S3FIFO CONCURRENT: push (push=%u pop=%u remove=%u evict=%u)\n",
+                   concurrent, s3fifo.in_pop, s3fifo.in_remove, s3fifo.in_evict);
     }
-    printf_log(LOG_DEBUG, "S3FIFO: push %p to %s (count %d->%d, cap=%d)\n",
-               db->x64_addr, qname, q->count, q->count + 1, q->capacity);
-
-    // INTEGRITY: Save old tail for verification
-    dynablock_t* old_tail = q->tail;
 
     db->s3fifo_prev = q->tail;
     db->s3fifo_next = NULL;
@@ -198,35 +145,19 @@ static void s3fifo_push(s3fifo_queue_t* q, dynablock_t* db) {
     q->tail = db;
     q->count++;
 
-    // INTEGRITY: Verify push worked correctly
-    if (q->tail != db) {
-        printf_log(LOG_INFO, "S3FIFO INTEGRITY: push %p to %s FAILED - tail=%p expected=%p\n",
-                   db->x64_addr, qname, q->tail ? q->tail->x64_addr : NULL, db->x64_addr);
-    }
-    if (db->s3fifo_next != NULL) {
-        printf_log(LOG_INFO, "S3FIFO INTEGRITY: push %p to %s FAILED - next=%p should be NULL\n",
-                   db->x64_addr, qname, db->s3fifo_next->x64_addr);
-    }
-    if (old_tail && old_tail->s3fifo_next != db) {
-        printf_log(LOG_INFO, "S3FIFO INTEGRITY: push %p to %s FAILED - old_tail->next=%p expected=%p\n",
-                   db->x64_addr, qname,
-                   old_tail->s3fifo_next ? old_tail->s3fifo_next->x64_addr : NULL, db->x64_addr);
-    }
-    if (q->count == 1 && q->head != db) {
-        printf_log(LOG_INFO, "S3FIFO INTEGRITY: push %p to %s FAILED - count=1 but head=%p\n",
-                   db->x64_addr, qname, q->head ? q->head->x64_addr : NULL);
-    }
-
-    // PERF: Detect queue growing beyond capacity (should trigger eviction)
-    if (q->count > q->capacity) {
-        printf_log(LOG_INFO, "S3FIFO PERF: %s queue OVER capacity! count=%d cap=%d\n",
-                   qname, q->count, q->capacity);
-    }
     __atomic_sub_fetch(&s3fifo.in_push, 1, __ATOMIC_SEQ_CST);
+    tls_in_push = 0;
 }
 
 static dynablock_t* s3fifo_pop(s3fifo_queue_t* q) {
     const char* qname = (q == &s3fifo.small_queue) ? "SMALL" : "MAIN";
+
+    // RE-ENTRY: Detect same-thread re-entry
+    if (tls_in_pop) {
+        printf_log(LOG_INFO, "S3FIFO REENTRY: pop %s while already in pop!\n", qname);
+    }
+    tls_in_pop = 1;
+
     // CONCURRENT: Detect concurrent push/pop/remove
     uint32_t concurrent = __atomic_add_fetch(&s3fifo.in_pop, 1, __ATOMIC_SEQ_CST);
     if (concurrent > 1 || s3fifo.in_push > 0 || s3fifo.in_remove > 0) {
@@ -239,23 +170,10 @@ static dynablock_t* s3fifo_pop(s3fifo_queue_t* q) {
         if (q->count != 0) {
             printf_log(LOG_INFO, "S3FIFO INTEGRITY: pop %s head=NULL but count=%d!\n", qname, q->count);
         }
-        printf_log(LOG_DEBUG, "S3FIFO: pop from %s returned NULL (count=%d)\n", qname, q->count);
         __atomic_sub_fetch(&s3fifo.in_pop, 1, __ATOMIC_SEQ_CST);
+        tls_in_pop = 0;
         return NULL;
     }
-
-    // INTEGRITY: Pre-pop checks
-    if (db->s3fifo_prev != NULL) {
-        printf_log(LOG_INFO, "S3FIFO INTEGRITY: pop %s head %p has prev=%p (should be NULL)\n",
-                   qname, db->x64_addr, db->s3fifo_prev->x64_addr);
-    }
-    if (db->s3fifo_queue != q) {
-        printf_log(LOG_INFO, "S3FIFO INTEGRITY: pop %s head %p queue=%p but expected %p\n",
-                   qname, db->x64_addr, db->s3fifo_queue, q);
-    }
-
-    printf_log(LOG_DEBUG, "S3FIFO: pop %p from %s (count %d->%d, hot=%d, in_used=%d)\n",
-               db->x64_addr, qname, q->count, q->count - 1, db->hot, db->in_used);
 
     dynablock_t* new_head = db->s3fifo_next;
     q->head = new_head;
@@ -265,66 +183,45 @@ static dynablock_t* s3fifo_pop(s3fifo_queue_t* q) {
     db->s3fifo_next = NULL;
     q->count--;
 
-    // INTEGRITY: Post-pop checks
-    if (q->count == 0) {
-        if (q->head != NULL || q->tail != NULL) {
-            printf_log(LOG_INFO, "S3FIFO INTEGRITY: pop %s count=0 but head=%p tail=%p\n",
-                       qname, q->head ? q->head->x64_addr : NULL, q->tail ? q->tail->x64_addr : NULL);
-        }
-    } else {
-        if (q->head == NULL) {
-            printf_log(LOG_INFO, "S3FIFO INTEGRITY: pop %s count=%d but head=NULL\n", qname, q->count);
-        }
-        if (new_head && new_head->s3fifo_prev != NULL) {
-            printf_log(LOG_INFO, "S3FIFO INTEGRITY: pop %s new_head %p has prev=%p (should be NULL)\n",
-                       qname, new_head->x64_addr, new_head->s3fifo_prev->x64_addr);
-        }
-    }
-
     __atomic_sub_fetch(&s3fifo.in_pop, 1, __ATOMIC_SEQ_CST);
+    tls_in_pop = 0;
     return db;
 }
 
 static void s3fifo_remove(s3fifo_queue_t* q, dynablock_t* db) {
+    // RE-ENTRY: Detect same-thread re-entry
+    if (tls_in_remove) {
+        printf_log(LOG_INFO, "S3FIFO REENTRY: remove while already in remove!\n");
+    }
+    tls_in_remove = 1;
+
     // CONCURRENT: Detect concurrent push/pop/remove
     uint32_t concurrent = __atomic_add_fetch(&s3fifo.in_remove, 1, __ATOMIC_SEQ_CST);
     if (concurrent > 1 || s3fifo.in_push > 0 || s3fifo.in_pop > 0) {
-        printf_log(LOG_INFO, "S3FIFO CONCURRENT: remove %p (push=%u pop=%u remove=%u evict=%u)\n",
-                   db ? db->x64_addr : NULL, s3fifo.in_push, s3fifo.in_pop, concurrent, s3fifo.in_evict);
+        printf_log(LOG_INFO, "S3FIFO CONCURRENT: remove (push=%u pop=%u remove=%u evict=%u)\n",
+                   s3fifo.in_push, s3fifo.in_pop, concurrent, s3fifo.in_evict);
     }
     if (!db || db->s3fifo_queue != q) {
-        printf_log(LOG_DEBUG, "S3FIFO: remove %p SKIP (queue mismatch db->q=%p q=%p)\n",
-                   db ? db->x64_addr : NULL, db ? db->s3fifo_queue : NULL, q);
         __atomic_sub_fetch(&s3fifo.in_remove, 1, __ATOMIC_SEQ_CST);
+        tls_in_remove = 0;
         return;
     }
     if (q->count == 0) {
-        printf_log(LOG_DEBUG, "S3FIFO: remove %p SKIP (count=0)\n", db->x64_addr);
         db->s3fifo_queue = NULL;
         __atomic_sub_fetch(&s3fifo.in_remove, 1, __ATOMIC_SEQ_CST);
+        tls_in_remove = 0;
         return;
     }
-    const char* qname = (q == &s3fifo.small_queue) ? "SMALL" : "MAIN";
-    // DIAGNOSTIC: Detect if block was already popped (limbo state)
-    if (!db->s3fifo_prev && !db->s3fifo_next && q->head != db) {
-        printf_log(LOG_INFO, "S3FIFO: CORRUPTION DETECTED! remove %p from %s but prev=NULL next=NULL head=%p (block was popped!)\n",
-                   db->x64_addr, qname, q->head ? q->head->x64_addr : NULL);
-    }
-    printf_log(LOG_DEBUG, "S3FIFO: remove %p from %s (count %d->%d)\n",
-               db->x64_addr, qname, q->count, q->count - 1);
+
     dynablock_t** next_indirect = db->s3fifo_prev ? &db->s3fifo_prev->s3fifo_next : &q->head;
     dynablock_t** prev_indirect = db->s3fifo_next ? &db->s3fifo_next->s3fifo_prev : &q->tail;
     *next_indirect = db->s3fifo_next;
     *prev_indirect = db->s3fifo_prev;
-    // DIAGNOSTIC: Detect queue corruption after removal
-    if (q->count > 1 && (!q->head || !q->tail)) {
-        printf_log(LOG_INFO, "S3FIFO: QUEUE CORRUPTED! %s after remove: head=%p tail=%p count=%d\n",
-                   qname, q->head ? q->head->x64_addr : NULL, q->tail ? q->tail->x64_addr : NULL, q->count - 1);
-    }
     db->s3fifo_prev = NULL;
     db->s3fifo_next = NULL;
     q->count--;
     __atomic_sub_fetch(&s3fifo.in_remove, 1, __ATOMIC_SEQ_CST);
+    tls_in_remove = 0;
 }
 
 static void s3fifo_ghost_push(uintptr_t x64_addr) {
@@ -410,6 +307,12 @@ static size_t s3fifo_try_evict(int from_main) {
     s3fifo_queue_t* queue = from_main ? &s3fifo.main_queue : &s3fifo.small_queue;
     const char* qname = from_main ? "MAIN" : "SMALL";
 
+    // RE-ENTRY: Detect same-thread re-entry (e.g., from signal handler)
+    if (tls_in_evict) {
+        printf_log(LOG_INFO, "S3FIFO REENTRY: evict %s while already in evict!\n", qname);
+    }
+    tls_in_evict = 1;
+
     // CONCURRENT: Detect concurrent eviction attempts
     uint32_t concurrent = __atomic_add_fetch(&s3fifo.in_evict, 1, __ATOMIC_SEQ_CST);
     if (concurrent > 1) {
@@ -431,7 +334,7 @@ static size_t s3fifo_try_evict(int from_main) {
         iterations++;
 
         // PERF: Detect queue loop-over (iterated through entire queue without evicting)
-        if (iterations > 0 && (iterations % initial_count) == 0) {
+        if (initial_count > 0 && iterations > 0 && (iterations % initial_count) == 0) {
             loop_count++;
             printf_log(LOG_INFO, "S3FIFO PERF: %s LOOP #%d (iter=%d cnt=%d) gone=%d in_used=%d float=%d max_in_used=%u\n",
                        qname, loop_count, iterations, initial_count,
@@ -507,6 +410,7 @@ static size_t s3fifo_try_evict(int from_main) {
             FreeDynablock(db, 0, 1);
             has_evicted = 1;
             __atomic_sub_fetch(&s3fifo.in_evict, 1, __ATOMIC_SEQ_CST);
+            tls_in_evict = 0;
             return block_size ? block_size : 1;
         } else {
             if (freq >= 2) {
@@ -526,6 +430,7 @@ static size_t s3fifo_try_evict(int from_main) {
             FreeDynablock(db, 0, 1);
             has_evicted = 1;
             __atomic_sub_fetch(&s3fifo.in_evict, 1, __ATOMIC_SEQ_CST);
+            tls_in_evict = 0;
             return block_size ? block_size : 1;
         }
     }
@@ -542,6 +447,7 @@ static size_t s3fifo_try_evict(int from_main) {
                    from_main ? 0 : promoted, from_main ? reinserted : 0);
     }
     __atomic_sub_fetch(&s3fifo.in_evict, 1, __ATOMIC_SEQ_CST);
+    tls_in_evict = 0;
     return 0;
 }
 
@@ -556,6 +462,12 @@ void S3FIFO_on_block_created(dynablock_t* db) {
                    db->x64_addr, db->s3fifo_queue);
         return;
     }
+    // RE-ENTRY: Detect same-thread re-entry (e.g., from signal handler)
+    if (tls_in_created) {
+        printf_log(LOG_INFO, "S3FIFO REENTRY: on_block_created %p while already in created!\n", db->x64_addr);
+    }
+    tls_in_created = 1;
+
     // CONCURRENT: Check if eviction is happening (could cause race)
     if (s3fifo.in_evict > 0) {
         printf_log(LOG_INFO, "S3FIFO CONCURRENT: on_block_created %p while evict in progress (evict_cnt=%u)\n",
@@ -570,6 +482,7 @@ void S3FIFO_on_block_created(dynablock_t* db) {
                s3fifo.main_queue.count, s3fifo.main_queue.capacity);
     db->s3fifo_queue = target;
     s3fifo_push(target, db);
+    tls_in_created = 0;
 }
 
 void S3FIFO_on_block_freed(dynablock_t* db) {
@@ -582,6 +495,12 @@ void S3FIFO_on_block_freed(dynablock_t* db) {
         printf_log(LOG_DEBUG, "S3FIFO: on_block_freed %p SKIP (not in queue)\n", db->x64_addr);
         return;
     }
+    // RE-ENTRY: Detect same-thread re-entry (e.g., from signal handler)
+    if (tls_in_freed) {
+        printf_log(LOG_INFO, "S3FIFO REENTRY: on_block_freed %p while already in freed!\n", db->x64_addr);
+    }
+    tls_in_freed = 1;
+
     // CONCURRENT: Check if eviction is happening (could cause race with freed block)
     if (s3fifo.in_evict > 0) {
         printf_log(LOG_INFO, "S3FIFO CONCURRENT: on_block_freed %p while evict in progress (evict_cnt=%u)\n",
@@ -596,6 +515,7 @@ void S3FIFO_on_block_freed(dynablock_t* db) {
         s3fifo_remove(db->s3fifo_queue, db);
     }
     db->s3fifo_queue = NULL;
+    tls_in_freed = 0;
 }
 
 int PurgeDynarecMap(void) {

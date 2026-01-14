@@ -1117,24 +1117,33 @@ static sigset_t     critical_prot = {0};
 // ABBA Deadlock detection: track if current thread holds mutex_prot
 static __thread int tls_mutex_prot_held = 0;
 int is_mutex_prot_held(void) { return tls_mutex_prot_held; }
+
+// Global tracking of mutex_prot owner for ABBA deadlock proof
+static volatile long mutex_prot_owner_tid = 0;
+long get_mutex_prot_owner(void) { return mutex_prot_owner_tid; }
+
 #ifdef DYNAREC
 // ABBA detection: declared in dynablock.c (only available in DYNAREC builds)
 extern int is_mutex_dyndump_held(void);
+extern long get_mutex_dyndump_owner(void);
+extern void set_mutex_dyndump_owner(long tid);
 #endif
 static void setProtection_generic(uintptr_t addr, size_t sz, uint32_t prot, mem_flag_t flags);
 #ifdef DYNAREC
 #define LOCK_PROT()         sigset_t old_sig = {0}; pthread_sigmask(SIG_BLOCK, &critical_prot, &old_sig); \
                             if(is_mutex_dyndump_held()) { \
-                                printf_log(LOG_INFO, "ABBA DEADLOCK WARNING! LOCK_PROT: about to acquire mutex_prot while mutex_dyndump is HELD!\n"); \
+                                int my_tid = GetTID(); \
+                                long prot_owner = mutex_prot_owner_tid; \
+                                printf_log(LOG_INFO, "ABBA WARNING PathA! tid=%d holds mutex_dyndump, trying mutex_prot (owner=%ld)\n", my_tid, prot_owner); \
                             } \
-                            mutex_lock(&mutex_prot); tls_mutex_prot_held = 1
+                            mutex_lock(&mutex_prot); mutex_prot_owner_tid = (long)GetTID(); tls_mutex_prot_held = 1
 #else
 #define LOCK_PROT()         sigset_t old_sig = {0}; pthread_sigmask(SIG_BLOCK, &critical_prot, &old_sig); \
-                            mutex_lock(&mutex_prot); tls_mutex_prot_held = 1
+                            mutex_lock(&mutex_prot); mutex_prot_owner_tid = (long)GetTID(); tls_mutex_prot_held = 1
 #endif
 #define LOCK_PROT_READ()    sigset_t old_sig = {0}; pthread_sigmask(SIG_BLOCK, &critical_prot, &old_sig); mutex_lock(&mutex_prot)
 #define LOCK_PROT_FAST()    mutex_lock(&mutex_prot)
-#define UNLOCK_PROT()       tls_mutex_prot_held = 0;                             \
+#define UNLOCK_PROT()       tls_mutex_prot_held = 0; mutex_prot_owner_tid = 0;   \
                             if(defered_prot_p) {                                \
                                 uintptr_t p = defered_prot_p; size_t sz = defered_prot_sz; uint32_t prot = defered_prot_prot; mem_flag_t f = defered_prot_flags;\
                                 defered_prot_p = 0;                             \

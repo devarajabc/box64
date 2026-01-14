@@ -1614,7 +1614,9 @@ void my_box64signalhandler(int32_t sig, siginfo_t* info, void * ucntx)
             db_searched = 1;
         }
         // access error, unprotect the block (and mark them dirty)
+        printf_log(LOG_INFO, "SIGSEGV: calling unprotectDB from signal handler, addr=%p\n", addr);
         unprotectDB((uintptr_t)addr, 1, 1);    // unprotect 1 byte... But then, the whole page will be unprotected
+        printf_log(LOG_INFO, "SIGSEGV: unprotectDB returned\n");
         CheckHotPage((uintptr_t)addr, prot);
         int db_need_test = (db && !BOX64ENV(dynarec_dirty))?getNeedTest((uintptr_t)db->x64_addr):0;
         if(db && ((addr>=db->x64_addr && addr<(db->x64_addr+db->x64_size)) || db_need_test)) {
@@ -1731,7 +1733,9 @@ dynarec_log(/*LOG_DEBUG*/LOG_INFO, "%04d|Repeated SIGSEGV with Access error on %
         unlock_signal();
     } else if ((sig==X64_SIGSEGV) && (addr) && (info->si_code == SEGV_ACCERR) && (prot&PROT_DYNAREC_R)) {
         // unprotect and continue to signal handler, because Write is not there on purpose
+        printf_log(LOG_INFO, "SIGSEGV(DYNAREC_R): calling unprotectDB from signal handler, addr=%p\n", addr);
         unprotectDB((uintptr_t)addr, 1, 1);    // unprotect 1 byte... But then, the whole page will be unprotected
+        printf_log(LOG_INFO, "SIGSEGV(DYNAREC_R): unprotectDB returned\n");
     }
     if(!db_searched) {
         db = FindDynablockFromNativeAddress(pc);

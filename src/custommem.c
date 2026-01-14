@@ -2339,20 +2339,24 @@ void addDBFromAddressRange(uintptr_t addr, size_t size)
 int cleanDBFromAddressRange(uintptr_t addr, size_t size, int destroy)
 {
     uintptr_t start_addr = my_context?((addr<my_context->max_db_size)?0:(addr-my_context->max_db_size)):addr;
-    dynarec_log(LOG_DEBUG, "cleanDBFromAddressRange %p/%p -> %p %s\n", (void*)addr, (void*)start_addr, (void*)(addr+size-1), destroy?"destroy":"mark");
+    printf_log(LOG_INFO, "cleanDBFromAddressRange ENTER addr=%p size=%zu %s\n", (void*)addr, size, destroy?"destroy":"mark");
     dynablock_t* db = NULL;
     uintptr_t end = addr+size;
     int ret = 0;
+    int block_count = 0;
     while (start_addr<end) {
         start_addr = getDBSize(start_addr, end-start_addr, &db);
         if(db) {
             ret = 1;
+            block_count++;
+            printf_log(LOG_DEBUG, "cleanDBFromAddressRange: found block %p at x64=%p\n", db, db->x64_addr);
             if(destroy)
                 FreeRangeDynablock(db, addr, size);
             else
                 MarkRangeDynablock(db, addr, size);
         }
     }
+    printf_log(LOG_INFO, "cleanDBFromAddressRange EXIT addr=%p blocks_found=%d\n", (void*)addr, block_count);
     return ret;
 }
 
@@ -2758,12 +2762,15 @@ void protectDB(uintptr_t addr, uintptr_t size)
 // Add the Write flag from an adress range, and mark all block as dirty
 void unprotectDB(uintptr_t addr, size_t size, int mark)
 {
-    dynarec_log(LOG_DEBUG, "unprotectDB %p -> %p (mark=%d)\n", (void*)addr, (void*)(addr+size-1), mark);
+    printf_log(LOG_INFO, "unprotectDB ENTER addr=%p size=%zu mark=%d\n", (void*)addr, size, mark);
 
     uintptr_t cur = addr&~(box64_pagesize-1);
     uintptr_t end = ALIGN(addr+size);
+    int mprotect_count = 0;
+    int cleandb_count = 0;
 
     LOCK_PROT();
+    printf_log(LOG_DEBUG, "unprotectDB: got mutex_prot\n");
     while(cur!=end) {
         uint32_t prot = 0, oprot;
         uintptr_t bend = 0;
@@ -2780,12 +2787,20 @@ void unprotectDB(uintptr_t addr, size_t size, int mark)
         if(!(prot&PROT_NEVERPROT)) {
             if(prot&PROT_DYNAREC) {
                 prot&=~PROT_DYN;
-                if(mark)
+                if(mark) {
+                    printf_log(LOG_DEBUG, "unprotectDB: cleanDBFromAddressRange(%p, %zu)\n", (void*)cur, bend-cur);
                     cleanDBFromAddressRange(cur, bend-cur, 0);
+                    cleandb_count++;
+                }
+                printf_log(LOG_DEBUG, "unprotectDB: mprotect(%p, %zu, 0x%x)\n", (void*)cur, bend-cur, prot);
                 mprotect((void*)cur, bend-cur, prot);
+                mprotect_count++;
             } else if(prot&PROT_DYNAREC_R) {
-                if(mark)
+                if(mark) {
+                    printf_log(LOG_DEBUG, "unprotectDB: cleanDBFromAddressRange(%p, %zu)\n", (void*)cur, bend-cur);
                     cleanDBFromAddressRange(cur, bend-cur, 0);
+                    cleandb_count++;
+                }
                 prot &= ~PROT_CUSTOM;
             }
         }
@@ -2794,16 +2809,20 @@ void unprotectDB(uintptr_t addr, size_t size, int mark)
         cur = bend;
     }
     UNLOCK_PROT();
+    printf_log(LOG_INFO, "unprotectDB EXIT addr=%p mprotect_calls=%d cleandb_calls=%d\n", (void*)addr, mprotect_count, cleandb_count);
 }
 // Add the NEVERCLEAN flag for an adress range, mark all block as dirty, and lift write protection if needed
 void neverprotectDB(uintptr_t addr, size_t size, int mark)
 {
-    dynarec_log(LOG_DEBUG, "neverprotectDB %p -> %p (mark=%d)\n", (void*)addr, (void*)(addr+size-1), mark);
+    printf_log(LOG_INFO, "neverprotectDB ENTER addr=%p size=%zu mark=%d\n", (void*)addr, size, mark);
 
     uintptr_t cur = addr&~(box64_pagesize-1);
     uintptr_t end = ALIGN(addr+size);
+    int mprotect_count = 0;
+    int cleandb_count = 0;
 
     LOCK_PROT();
+    printf_log(LOG_DEBUG, "neverprotectDB: got mutex_prot\n");
     while(cur!=end) {
         uint32_t prot = 0, oprot;
         uintptr_t bend = 0;
@@ -2820,12 +2839,20 @@ void neverprotectDB(uintptr_t addr, size_t size, int mark)
         if(!(prot&PROT_NEVERPROT)) {
             if(prot&PROT_DYNAREC) {
                 prot&=~PROT_DYN;
-                if(mark)
+                if(mark) {
+                    printf_log(LOG_DEBUG, "neverprotectDB: cleanDBFromAddressRange(%p, %zu)\n", (void*)cur, bend-cur);
                     cleanDBFromAddressRange(cur, bend-cur, 0);
+                    cleandb_count++;
+                }
+                printf_log(LOG_DEBUG, "neverprotectDB: mprotect(%p, %zu, 0x%x)\n", (void*)cur, bend-cur, prot);
                 mprotect((void*)cur, bend-cur, prot);
+                mprotect_count++;
             } else if(prot&PROT_DYNAREC_R) {
-                if(mark)
+                if(mark) {
+                    printf_log(LOG_DEBUG, "neverprotectDB: cleanDBFromAddressRange(%p, %zu)\n", (void*)cur, bend-cur);
                     cleanDBFromAddressRange(cur, bend-cur, 0);
+                    cleandb_count++;
+                }
                 prot &= ~PROT_DYN;
             }
             prot |= PROT_NEVERCLEAN;
@@ -2835,6 +2862,7 @@ void neverprotectDB(uintptr_t addr, size_t size, int mark)
         cur = bend;
     }
     UNLOCK_PROT();
+    printf_log(LOG_INFO, "neverprotectDB EXIT addr=%p mprotect_calls=%d cleandb_calls=%d\n", (void*)addr, mprotect_count, cleandb_count);
 }
 
 // Remove the NEVERCLEAN flag for an adress range

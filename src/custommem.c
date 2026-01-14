@@ -41,6 +41,13 @@ static rbtree_t            *rbt_dynmem = NULL;
 
 #define S3FIFO_QUEUE_FLOATING ((s3fifo_queue_t*)(uintptr_t)1)
 
+// Portable thread ID for logging (works on both Unix and Windows/WOW64)
+#ifdef _WIN32
+#define S3FIFO_THREAD_ID() ((long)0)  // Simplified for Windows build
+#else
+#define S3FIFO_THREAD_ID() (S3FIFO_THREAD_ID())
+#endif
+
 KHASH_MAP_INIT_INT64(ghost, uint32_t)  // value = ring index
 
 // Round up to next power of 2 (for fast modulo via bitmask)
@@ -76,7 +83,7 @@ static struct {
     volatile uint32_t in_pop;        // Count of threads in pop
     volatile uint32_t in_remove;     // Count of threads in remove
     volatile uint32_t in_evict;      // Count of threads in evict
-    volatile pthread_t evict_thread; // Thread currently in evict
+    volatile uintptr_t evict_thread; // Thread ID currently in evict (stored as uintptr_t for portability)
 } s3fifo = {0};
 
 // Linked-list integrity check: returns 0 if OK, error code if corrupt
@@ -183,10 +190,10 @@ static void s3fifo_push(s3fifo_queue_t* q, dynablock_t* db) {
     uint32_t concurrent = __atomic_add_fetch(&s3fifo.in_push, 1, __ATOMIC_SEQ_CST);
     if (concurrent > 1 || s3fifo.in_pop > 0 || s3fifo.in_remove > 0) {
         printf_log(LOG_INFO, "S3FIFO CONCURRENT: push %p thread=%ld (push=%u pop=%u remove=%u evict=%u)\n",
-                   db->x64_addr, (long)pthread_self(), concurrent, s3fifo.in_pop, s3fifo.in_remove, s3fifo.in_evict);
+                   db->x64_addr, S3FIFO_THREAD_ID(), concurrent, s3fifo.in_pop, s3fifo.in_remove, s3fifo.in_evict);
     }
     printf_log(LOG_DEBUG, "S3FIFO: push %p to %s (count %d->%d, cap=%d) thread=%ld\n",
-               db->x64_addr, qname, q->count, q->count + 1, q->capacity, (long)pthread_self());
+               db->x64_addr, qname, q->count, q->count + 1, q->capacity, S3FIFO_THREAD_ID());
 
     // INTEGRITY: Save old tail for verification
     dynablock_t* old_tail = q->tail;
@@ -231,7 +238,7 @@ static dynablock_t* s3fifo_pop(s3fifo_queue_t* q) {
     uint32_t concurrent = __atomic_add_fetch(&s3fifo.in_pop, 1, __ATOMIC_SEQ_CST);
     if (concurrent > 1 || s3fifo.in_push > 0 || s3fifo.in_remove > 0) {
         printf_log(LOG_INFO, "S3FIFO CONCURRENT: pop %s thread=%ld (push=%u pop=%u remove=%u evict=%u)\n",
-                   qname, (long)pthread_self(), s3fifo.in_push, concurrent, s3fifo.in_remove, s3fifo.in_evict);
+                   qname, S3FIFO_THREAD_ID(), s3fifo.in_push, concurrent, s3fifo.in_remove, s3fifo.in_evict);
     }
     dynablock_t* db = q->head;
     if (!db) {
@@ -240,7 +247,7 @@ static dynablock_t* s3fifo_pop(s3fifo_queue_t* q) {
             printf_log(LOG_INFO, "S3FIFO INTEGRITY: pop %s head=NULL but count=%d!\n", qname, q->count);
         }
         printf_log(LOG_DEBUG, "S3FIFO: pop from %s returned NULL (count=%d) thread=%ld\n",
-                   qname, q->count, (long)pthread_self());
+                   qname, q->count, S3FIFO_THREAD_ID());
         __atomic_sub_fetch(&s3fifo.in_pop, 1, __ATOMIC_SEQ_CST);
         return NULL;
     }
@@ -256,7 +263,7 @@ static dynablock_t* s3fifo_pop(s3fifo_queue_t* q) {
     }
 
     printf_log(LOG_DEBUG, "S3FIFO: pop %p from %s (count %d->%d, hot=%d, in_used=%d) thread=%ld\n",
-               db->x64_addr, qname, q->count, q->count - 1, db->hot, db->in_used, (long)pthread_self());
+               db->x64_addr, qname, q->count, q->count - 1, db->hot, db->in_used, S3FIFO_THREAD_ID());
 
     dynablock_t* new_head = db->s3fifo_next;
     q->head = new_head;
@@ -291,17 +298,17 @@ static void s3fifo_remove(s3fifo_queue_t* q, dynablock_t* db) {
     uint32_t concurrent = __atomic_add_fetch(&s3fifo.in_remove, 1, __ATOMIC_SEQ_CST);
     if (concurrent > 1 || s3fifo.in_push > 0 || s3fifo.in_pop > 0) {
         printf_log(LOG_INFO, "S3FIFO CONCURRENT: remove %p thread=%ld (push=%u pop=%u remove=%u evict=%u)\n",
-                   db ? db->x64_addr : NULL, (long)pthread_self(),
+                   db ? db->x64_addr : NULL, S3FIFO_THREAD_ID(),
                    s3fifo.in_push, s3fifo.in_pop, concurrent, s3fifo.in_evict);
     }
     if (!db || db->s3fifo_queue != q) {
         printf_log(LOG_DEBUG, "S3FIFO: remove %p SKIP (queue mismatch db->q=%p q=%p) thread=%ld\n",
-                   db ? db->x64_addr : NULL, db ? db->s3fifo_queue : NULL, q, (long)pthread_self());
+                   db ? db->x64_addr : NULL, db ? db->s3fifo_queue : NULL, q, S3FIFO_THREAD_ID());
         __atomic_sub_fetch(&s3fifo.in_remove, 1, __ATOMIC_SEQ_CST);
         return;
     }
     if (q->count == 0) {
-        printf_log(LOG_DEBUG, "S3FIFO: remove %p SKIP (count=0) thread=%ld\n", db->x64_addr, (long)pthread_self());
+        printf_log(LOG_DEBUG, "S3FIFO: remove %p SKIP (count=0) thread=%ld\n", db->x64_addr, S3FIFO_THREAD_ID());
         db->s3fifo_queue = NULL;
         __atomic_sub_fetch(&s3fifo.in_remove, 1, __ATOMIC_SEQ_CST);
         return;
@@ -310,10 +317,10 @@ static void s3fifo_remove(s3fifo_queue_t* q, dynablock_t* db) {
     // DIAGNOSTIC: Detect if block was already popped (limbo state)
     if (!db->s3fifo_prev && !db->s3fifo_next && q->head != db) {
         printf_log(LOG_INFO, "S3FIFO: CORRUPTION DETECTED! remove %p from %s but prev=NULL next=NULL head=%p (block was popped!) thread=%ld\n",
-                   db->x64_addr, qname, q->head ? q->head->x64_addr : NULL, (long)pthread_self());
+                   db->x64_addr, qname, q->head ? q->head->x64_addr : NULL, S3FIFO_THREAD_ID());
     }
     printf_log(LOG_DEBUG, "S3FIFO: remove %p from %s (count %d->%d) thread=%ld\n",
-               db->x64_addr, qname, q->count, q->count - 1, (long)pthread_self());
+               db->x64_addr, qname, q->count, q->count - 1, S3FIFO_THREAD_ID());
     dynablock_t** next_indirect = db->s3fifo_prev ? &db->s3fifo_prev->s3fifo_next : &q->head;
     dynablock_t** prev_indirect = db->s3fifo_next ? &db->s3fifo_next->s3fifo_prev : &q->tail;
     *next_indirect = db->s3fifo_next;
@@ -321,7 +328,7 @@ static void s3fifo_remove(s3fifo_queue_t* q, dynablock_t* db) {
     // DIAGNOSTIC: Detect queue corruption after removal
     if (q->count > 1 && (!q->head || !q->tail)) {
         printf_log(LOG_INFO, "S3FIFO: QUEUE CORRUPTED! %s after remove: head=%p tail=%p count=%d thread=%ld\n",
-                   qname, q->head ? q->head->x64_addr : NULL, q->tail ? q->tail->x64_addr : NULL, q->count - 1, (long)pthread_self());
+                   qname, q->head ? q->head->x64_addr : NULL, q->tail ? q->tail->x64_addr : NULL, q->count - 1, S3FIFO_THREAD_ID());
     }
     db->s3fifo_prev = NULL;
     db->s3fifo_next = NULL;
@@ -371,10 +378,10 @@ static void s3fifo_init(uint32_t capacity) {
     if (s3fifo.initialized) {
         // MULTIPLE INIT DETECTION: This should not happen!
         printf_log(LOG_INFO, "S3FIFO: MULTIPLE INIT ATTEMPT #%u (already initialized) thread=%ld\n",
-                   s3fifo.init_count, (long)pthread_self());
+                   s3fifo.init_count, S3FIFO_THREAD_ID());
         return;
     }
-    printf_log(LOG_INFO, "S3FIFO: init #%u starting thread=%ld\n", s3fifo.init_count, (long)pthread_self());
+    printf_log(LOG_INFO, "S3FIFO: init #%u starting thread=%ld\n", s3fifo.init_count, S3FIFO_THREAD_ID());
     // ~15.6% SMALL (1/8 + 1/32 = 5/32), ~84.4% MAIN
     s3fifo.small_queue.capacity = (capacity >> 3) + (capacity >> 5);
     if (s3fifo.small_queue.capacity < 100)
@@ -387,7 +394,7 @@ static void s3fifo_init(uint32_t capacity) {
     s3fifo.ghost.head = 0;
     s3fifo.initialized = 1;
     printf_log(LOG_INFO, "S3FIFO: INITIALIZED #%u total_cap=%u small_cap=%u main_cap=%u ghost_cap=%u thread=%ld\n",
-               s3fifo.init_count, capacity, s3fifo.small_queue.capacity, s3fifo.main_queue.capacity, ghost_cap, (long)pthread_self());
+               s3fifo.init_count, capacity, s3fifo.small_queue.capacity, s3fifo.main_queue.capacity, ghost_cap, S3FIFO_THREAD_ID());
 }
 
 static void s3fifo_fini(void) {
@@ -1213,7 +1220,7 @@ extern int is_mutex_dyndump_held(void);
 static void setProtection_generic(uintptr_t addr, size_t sz, uint32_t prot, mem_flag_t flags);
 #define LOCK_PROT()         sigset_t old_sig = {0}; pthread_sigmask(SIG_BLOCK, &critical_prot, &old_sig); \
                             if(is_mutex_dyndump_held()) { \
-                                printf_log(LOG_INFO, "ABBA DEADLOCK WARNING! LOCK_PROT: about to acquire mutex_prot while mutex_dyndump is HELD! Thread=%ld\n", (long)pthread_self()); \
+                                printf_log(LOG_INFO, "ABBA DEADLOCK WARNING! LOCK_PROT: about to acquire mutex_prot while mutex_dyndump is HELD!\n"); \
                             } \
                             mutex_lock(&mutex_prot); tls_mutex_prot_held = 1
 #define LOCK_PROT_READ()    sigset_t old_sig = {0}; pthread_sigmask(SIG_BLOCK, &critical_prot, &old_sig); mutex_lock(&mutex_prot)

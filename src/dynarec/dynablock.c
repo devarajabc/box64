@@ -26,6 +26,13 @@
 #include "khash.h"
 #include "rbtree.h"
 
+// ABBA deadlock detection - declared in custommem.c
+extern int is_mutex_prot_held(void);
+
+// ABBA deadlock detection: track if current thread holds mutex_dyndump
+static __thread int tls_mutex_dyndump_held = 0;
+int is_mutex_dyndump_held(void) { return tls_mutex_dyndump_held; }
+
 uint32_t X31_hash_code(void* addr, int len)
 {
     if(!len) return 0;
@@ -115,6 +122,12 @@ void FreeInvalidDynablock(dynablock_t* db, int need_lock)
                    db, db->x64_addr, db->gone, db->previous, need_lock);
         uintptr_t db_size = db->x64_size;
         if(need_lock) {
+            // ABBA DEADLOCK DETECTION: Check if we're about to create Path B of ABBA deadlock
+            // Path B: mutex_prot (held) → mutex_dyndump (about to acquire)
+            if(is_mutex_prot_held()) {
+                printf_log(LOG_INFO, "ABBA DEADLOCK WARNING! FreeInvalidDynablock(%p): about to acquire mutex_dyndump while mutex_prot is HELD! Thread=%ld\n",
+                           db->x64_addr, (long)pthread_self());
+            }
             printf_log(LOG_DEBUG, "FreeInvalidDynablock(%p): acquiring mutex_dyndump\n", db->x64_addr);
             mutex_lock(&my_context->mutex_dyndump);
             printf_log(LOG_DEBUG, "FreeInvalidDynablock(%p): got mutex_dyndump\n", db->x64_addr);
@@ -154,6 +167,11 @@ void FreeDynablock(dynablock_t* db, int need_lock, int need_remove)
         if(need_remove)
             setJumpTableDefault64(db->x64_addr);
         if(need_lock) {
+            // ABBA DEADLOCK DETECTION: Check if we're about to create Path B of ABBA deadlock
+            if(is_mutex_prot_held()) {
+                printf_log(LOG_INFO, "ABBA DEADLOCK WARNING! FreeDynablock(%p): about to acquire mutex_dyndump while mutex_prot is HELD! Thread=%ld\n",
+                           db->x64_addr, (long)pthread_self());
+            }
             printf_log(LOG_DEBUG, "FreeDynablock(%p): acquiring mutex_dyndump\n", db->x64_addr);
             mutex_lock(&my_context->mutex_dyndump);
             printf_log(LOG_DEBUG, "FreeDynablock(%p): got mutex_dyndump\n", db->x64_addr);
@@ -297,16 +315,19 @@ static dynablock_t* internalDBGetBlock(x64emu_t* emu, uintptr_t addr, uintptr_t 
     if(need_lock) {
         if(BOX64ENV(dynarec_wait)) {
             mutex_lock(&my_context->mutex_dyndump);
+            tls_mutex_dyndump_held = 1;  // ABBA tracking: mark mutex_dyndump as held
         } else {
             if(mutex_trylock(&my_context->mutex_dyndump)) {   // FillBlock not available for now
                 pthread_sigmask(SIG_SETMASK, &old_sig, NULL);
                 return NULL;
             }
+            tls_mutex_dyndump_held = 1;  // ABBA tracking: mark mutex_dyndump as held
         }
         block = getDB(addr);    // just in case
         if(block) {
             if(block && getNeedTest(addr) && (getProtection_fast(addr)&req_prot)!=req_prot)
                 block = NULL;
+            tls_mutex_dyndump_held = 0;  // ABBA tracking: clear before unlock
             mutex_unlock(&my_context->mutex_dyndump);
             pthread_sigmask(SIG_SETMASK, &old_sig, NULL);
             return block;
@@ -314,16 +335,20 @@ static dynablock_t* internalDBGetBlock(x64emu_t* emu, uintptr_t addr, uintptr_t 
     }
 #ifndef _WIN32
     if((getProtection_fast(addr)&req_prot)!=req_prot) {// cannot be run, get out of the Dynarec
-        if(need_lock)
+        if(need_lock) {
+            tls_mutex_dyndump_held = 0;  // ABBA tracking: clear before unlock
             mutex_unlock(&my_context->mutex_dyndump);
+        }
         pthread_sigmask(SIG_SETMASK, &old_sig, NULL);
         return NULL;
     }
 #endif
     if (SigSetJmp(GET_JUMPBUFF(dynarec_jmpbuf), 1)) {
         printf_log(LOG_INFO, "FillBlock at %p triggered a segfault, canceling\n", (void*)addr);
-        if(need_lock)
+        if(need_lock) {
+            tls_mutex_dyndump_held = 0;  // ABBA tracking: clear before unlock
             mutex_unlock(&my_context->mutex_dyndump);
+        }
         pthread_sigmask(SIG_SETMASK, &old_sig, NULL);
         return NULL;
     }
@@ -353,8 +378,10 @@ static dynablock_t* internalDBGetBlock(x64emu_t* emu, uintptr_t addr, uintptr_t 
             }
         }
     }
-    if(need_lock)
+    if(need_lock) {
+        tls_mutex_dyndump_held = 0;  // ABBA tracking: clear before unlock
         mutex_unlock(&my_context->mutex_dyndump);
+    }
     pthread_sigmask(SIG_SETMASK, &old_sig, NULL);
 
     dynarec_log(LOG_DEBUG, "%04d| --- DynaRec Block %p created @%p:%p (%p, 0x%x bytes)\n", GetTID(), block, (void*)addr, (void*)(addr+((block)?block->x64_size:1)-1), (block)?block->block:0, (block)?block->size:0);

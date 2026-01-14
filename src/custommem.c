@@ -104,12 +104,22 @@ static void s3fifo_remove(s3fifo_queue_t* q, dynablock_t* db) {
         return;
     }
     const char* qname = (q == &s3fifo.small_queue) ? "SMALL" : "MAIN";
+    // DIAGNOSTIC: Detect if block was already popped (limbo state)
+    if (!db->s3fifo_prev && !db->s3fifo_next && q->head != db) {
+        printf_log(LOG_INFO, "S3FIFO: CORRUPTION DETECTED! remove %p from %s but prev=NULL next=NULL head=%p (block was popped!)\n",
+                   db->x64_addr, qname, q->head ? q->head->x64_addr : NULL);
+    }
     printf_log(LOG_DEBUG, "S3FIFO: remove %p from %s (count %d->%d)\n",
                db->x64_addr, qname, q->count, q->count - 1);
     dynablock_t** next_indirect = db->s3fifo_prev ? &db->s3fifo_prev->s3fifo_next : &q->head;
     dynablock_t** prev_indirect = db->s3fifo_next ? &db->s3fifo_next->s3fifo_prev : &q->tail;
     *next_indirect = db->s3fifo_next;
     *prev_indirect = db->s3fifo_prev;
+    // DIAGNOSTIC: Detect queue corruption after removal
+    if (q->count > 1 && (!q->head || !q->tail)) {
+        printf_log(LOG_INFO, "S3FIFO: QUEUE CORRUPTED! %s after remove: head=%p tail=%p count=%d\n",
+                   qname, q->head ? q->head->x64_addr : NULL, q->tail ? q->tail->x64_addr : NULL, q->count - 1);
+    }
     db->s3fifo_prev = NULL;
     db->s3fifo_next = NULL;
     q->count--;
@@ -179,11 +189,21 @@ static size_t s3fifo_try_evict(int from_main) {
 
     while (!has_evicted && queue->count > 0 && max_iterations-- > 0) {
         dynablock_t* db = s3fifo_pop(queue);
-        if (!db) break;
+        if (!db) {
+            // DIAGNOSTIC: pop returned NULL but count > 0 means queue is corrupted!
+            const char* qname = from_main ? "MAIN" : "SMALL";
+            printf_log(LOG_INFO, "S3FIFO: QUEUE CORRUPTED! pop returned NULL but %s count=%d head=%p tail=%p\n",
+                       qname, queue->count, queue->head ? queue->head->x64_addr : NULL,
+                       queue->tail ? queue->tail->x64_addr : NULL);
+            break;
+        }
+
+        // FIX: Clear queue pointer IMMEDIATELY after pop to prevent corruption
+        // if FreeDynablock is called during processing (e.g., from signal handler)
+        db->s3fifo_queue = NULL;
 
         if (db->gone) {
-            db->s3fifo_queue = NULL;
-            continue;
+            continue;  // s3fifo_queue already NULL
         }
 
         uint32_t in_used = native_lock_get_d(&db->in_used);
@@ -192,6 +212,7 @@ static size_t s3fifo_try_evict(int from_main) {
                 printf_log(LOG_DEBUG, "S3FIFO: %p FLOATING (in_used=%d)\n", db->x64_addr, in_used);
                 db->s3fifo_queue = S3FIFO_QUEUE_FLOATING;
             } else {
+                db->s3fifo_queue = queue;  // FIX: Set BEFORE push
                 s3fifo_push(queue, db);
             }
             continue;
@@ -207,12 +228,13 @@ static size_t s3fifo_try_evict(int from_main) {
             // Reference S3-FIFO: MIN(freq, 3) - 1, reinsert if > 0
             if (freq >= 1) {
                 native_lock_storeb(&db->hot, freq - 1);
+                db->s3fifo_queue = &s3fifo.main_queue;  // FIX: Set BEFORE push
                 s3fifo_push(&s3fifo.main_queue, db);
                 continue;
             }
             size_t block_size = db->x64_size;
             printf_log(LOG_DEBUG, "S3FIFO: %p evict MAIN sz=%zu\n", db->x64_addr, block_size);
-            db->s3fifo_queue = NULL;
+            // s3fifo_queue already NULL from line 203
             FreeDynablock(db, 0, 1);
             has_evicted = 1;
             return block_size ? block_size : 1;
@@ -227,7 +249,7 @@ static size_t s3fifo_try_evict(int from_main) {
             size_t block_size = db->x64_size;
             printf_log(LOG_DEBUG, "S3FIFO: %p evict SMALL sz=%zu\n", db->x64_addr, block_size);
             s3fifo_ghost_push((uintptr_t)db->x64_addr);
-            db->s3fifo_queue = NULL;
+            // s3fifo_queue already NULL from line 203
             FreeDynablock(db, 0, 1);
             has_evicted = 1;
             return block_size ? block_size : 1;
@@ -828,11 +850,21 @@ static size_t       defered_prot_sz = 0;
 static uint32_t     defered_prot_prot = 0;
 static mem_flag_t   defered_prot_flags = MEM_ALLOCATED;
 static sigset_t     critical_prot = {0};
+// ABBA Deadlock detection: track if current thread holds mutex_prot
+static __thread int tls_mutex_prot_held = 0;
+int is_mutex_prot_held(void) { return tls_mutex_prot_held; }
+// ABBA detection: declared in dynablock.c
+extern int is_mutex_dyndump_held(void);
 static void setProtection_generic(uintptr_t addr, size_t sz, uint32_t prot, mem_flag_t flags);
-#define LOCK_PROT()         sigset_t old_sig = {0}; pthread_sigmask(SIG_BLOCK, &critical_prot, &old_sig); mutex_lock(&mutex_prot)
+#define LOCK_PROT()         sigset_t old_sig = {0}; pthread_sigmask(SIG_BLOCK, &critical_prot, &old_sig); \
+                            if(is_mutex_dyndump_held()) { \
+                                printf_log(LOG_INFO, "ABBA DEADLOCK WARNING! LOCK_PROT: about to acquire mutex_prot while mutex_dyndump is HELD! Thread=%ld\n", (long)pthread_self()); \
+                            } \
+                            mutex_lock(&mutex_prot); tls_mutex_prot_held = 1
 #define LOCK_PROT_READ()    sigset_t old_sig = {0}; pthread_sigmask(SIG_BLOCK, &critical_prot, &old_sig); mutex_lock(&mutex_prot)
 #define LOCK_PROT_FAST()    mutex_lock(&mutex_prot)
-#define UNLOCK_PROT()       if(defered_prot_p) {                                \
+#define UNLOCK_PROT()       tls_mutex_prot_held = 0;                             \
+                            if(defered_prot_p) {                                \
                                 uintptr_t p = defered_prot_p; size_t sz = defered_prot_sz; uint32_t prot = defered_prot_prot; mem_flag_t f = defered_prot_flags;\
                                 defered_prot_p = 0;                             \
                                 pthread_sigmask(SIG_SETMASK, &old_sig, NULL);   \

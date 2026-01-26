@@ -104,28 +104,8 @@ static void s3fifo_remove(s3fifo_queue_t* q, dynablock_t* db) {
     if (!db || db->s3fifo_queue != q) {
         return;
     }
-    // If queue is empty (e.g., after fork reset), just clear the block's fields
-    // The block's prev/next pointers may be stale (pointing to parent's blocks)
-    if (q->count == 0 || (!q->head && !q->tail)) {
+    if (q->count == 0) {
         db->s3fifo_queue = NULL;
-        db->s3fifo_prev = NULL;
-        db->s3fifo_next = NULL;
-        return;
-    }
-
-    // Validate that the block is actually reachable from the queue
-    // After fork, block's prev/next may point to parent's memory
-    int found = 0;
-    dynablock_t* cur = q->head;
-    while (cur && !found) {
-        if (cur == db) found = 1;
-        cur = cur->s3fifo_next;
-    }
-    if (!found) {
-        // Block thinks it's in this queue but isn't reachable - stale state
-        db->s3fifo_queue = NULL;
-        db->s3fifo_prev = NULL;
-        db->s3fifo_next = NULL;
         return;
     }
 
@@ -330,22 +310,15 @@ static int s3fifo_evict_main(void) {
 
 void S3FIFO_cache_write(dynablock_t* db) {
     if (!BOX64ENV(dynarec_purge)) return;
-    if (!s3fifo.initialized || !db || !db->done) return;
+    if (!db || !db->done) return;
 
-    // Check for stale S3-FIFO state (e.g., block inherited from parent after fork)
-    // If block thinks it's tracked but the queue was reset (empty), clear stale state
-    if (db->s3fifo_queue && db->s3fifo_queue != S3FIFO_QUEUE_FLOATING) {
-        s3fifo_queue_t* q = (s3fifo_queue_t*)db->s3fifo_queue;
-        // Queue was reset (after fork) but block still has stale reference
-        if (q->count == 0 && !q->head && !q->tail) {
-            printf_log(LOG_DEBUG, "S3FIFO: clearing stale state for %p (post-fork)\n", db);
-            db->s3fifo_queue = NULL;
-            db->s3fifo_prev = NULL;
-            db->s3fifo_next = NULL;
-        }
+    // Lazy re-initialization after fork (child process gets its own S3-FIFO)
+    // atfork handler sets initialized=0, we re-init here (safe - not in signal handler)
+    if (!s3fifo.initialized) {
+        s3fifo_init(BOX64ENV(s3fifo_capacity));
     }
 
-    if (db->s3fifo_queue) return;  // Already tracked (and valid)
+    if (db->s3fifo_queue) return;  // Already tracked
     db->freq = 0;
 
     // Per reference S3FIFO_evict(): evict one queue at a time with priority
@@ -382,15 +355,11 @@ void S3FIFO_on_block_freed(dynablock_t* db) {
     if (!db->s3fifo_queue) return;  // Already removed (eviction case)
 
     if (db->s3fifo_queue == S3FIFO_QUEUE_FLOATING) {
-        // After fork reset, floating_count is 0, so this may be stale
         if (s3fifo.floating_count > 0) s3fifo.floating_count--;
     } else {
-        // s3fifo_remove handles stale state detection
         s3fifo_remove(db->s3fifo_queue, db);
     }
     db->s3fifo_queue = NULL;
-    db->s3fifo_prev = NULL;
-    db->s3fifo_next = NULL;
 }
 
 static uint64_t jmptbl_allocated = 0, jmptbl_allocated1 = 0, jmptbl_allocated2 = 0, jmptbl_allocated3 = 0;
@@ -3222,37 +3191,26 @@ static void atfork_child_custommem(void)
     // (re)init mutex if it was lock before the fork
     init_mutexes();
 
-    // Reset S3-FIFO state for child process
-    // After fork, the child inherits queue pointers to parent's dynablocks (via COW)
-    // These pointers are stale/invalid in the child's context
+    // Disable S3-FIFO in child process
+    // After fork, child inherits parent's dynarec cache via COW (usable as-is)
+    // Child typically calls exec() soon, replacing address space entirely
+    // If child continues running, blocks work fine - just no eviction tracking
+    // Don't allocate memory here (atfork handlers should avoid malloc)
     if (s3fifo.initialized) {
-        // Clear queues - don't free blocks, they belong to parent
-        // The pointers (head/tail) point to parent's memory via COW
+        // Abandon parent's data structures (don't free - parent owns them)
         s3fifo.small_queue.head = NULL;
         s3fifo.small_queue.tail = NULL;
         s3fifo.small_queue.count = 0;
-
         s3fifo.main_queue.head = NULL;
         s3fifo.main_queue.tail = NULL;
         s3fifo.main_queue.count = 0;
-
-        // Reset ghost queue - addresses are from parent's x64 execution context
-        // Don't free the memory (parent owns it), just clear the contents
-        if (s3fifo.ghost.ring) {
-            // Allocate new ring buffer for child (parent owns the old one)
-            uint32_t ghost_cap = s3fifo.ghost.mask + 1;
-            s3fifo.ghost.ring = (uintptr_t*)box_calloc(ghost_cap, sizeof(uintptr_t));
-        }
-        if (s3fifo.ghost.hash) {
-            // Create new hash table for child (parent owns the old one)
-            s3fifo.ghost.hash = kh_init(ghost);
-        }
+        s3fifo.ghost.ring = NULL;  // Parent owns this memory
+        s3fifo.ghost.hash = NULL;  // Parent owns this memory
         s3fifo.ghost.head = 0;
-
-        // Reset floating count - floating blocks belong to parent
         s3fifo.floating_count = 0;
-
-        printf_log(LOG_DEBUG, "S3FIFO: Reset state after fork (child process)\n");
+        // Mark as uninitialized - S3FIFO_cache_write will return early
+        s3fifo.initialized = 0;
+        printf_log(LOG_DEBUG, "S3FIFO: Disabled in child process after fork\n");
     }
 }
 void preserve_highest32()

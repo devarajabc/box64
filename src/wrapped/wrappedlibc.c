@@ -2949,6 +2949,7 @@ EXPORT int32_t my___register_atfork(x64emu_t *emu, void* prepare, void* parent, 
 {
     (void)emu;
     // this is partly incorrect, because the emulated funcionts should be executed by actual fork and not by my_atfork...
+    mutex_lock(&my_context->mutex_thread);
     if(my_context->atfork_sz==my_context->atfork_cap) {
         my_context->atfork_cap += 4;
         my_context->atforks = (atfork_fnc_t*)box_realloc(my_context->atforks, my_context->atfork_cap*sizeof(atfork_fnc_t));
@@ -2958,6 +2959,7 @@ EXPORT int32_t my___register_atfork(x64emu_t *emu, void* prepare, void* parent, 
     my_context->atforks[i].parent = (uintptr_t)parent;
     my_context->atforks[i].child = (uintptr_t)child;
     my_context->atforks[i].handle = handle;
+    mutex_unlock(&my_context->mutex_thread);
     return 0;
 }
 

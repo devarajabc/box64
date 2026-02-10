@@ -2605,6 +2605,7 @@ EXPORT int my32_getgrgid_r(x64emu_t* emu, gid_t gid, struct i386_group *grp, cha
 EXPORT int32_t my32___register_atfork(x64emu_t *emu, void* prepare, void* parent, void* child, void* handle)
 {
     // this is partly incorrect, because the emulated funcionts should be executed by actual fork and not by my32_atfork...
+    mutex_lock(&my_context->mutex_thread);
     if(my_context->atfork_sz==my_context->atfork_cap) {
         my_context->atfork_cap += 4;
         my_context->atforks = (atfork_fnc_t*)box_realloc(my_context->atforks, my_context->atfork_cap*sizeof(atfork_fnc_t));
@@ -2614,6 +2615,7 @@ EXPORT int32_t my32___register_atfork(x64emu_t *emu, void* prepare, void* parent
     my_context->atforks[i].parent = (uintptr_t)parent;
     my_context->atforks[i].child = (uintptr_t)child;
     my_context->atforks[i].handle = handle;
+    mutex_unlock(&my_context->mutex_thread);
     return 0;
 }
 

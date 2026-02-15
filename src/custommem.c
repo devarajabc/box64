@@ -1706,7 +1706,7 @@ uintptr_t AllocDynarecMap(uintptr_t x64_addr, size_t size, int is_new)
         list->cap+=4;
         list->chunks = box_realloc(list->chunks, list->cap*sizeof(blocklist_t**));
     }
-    int i = list->size++;
+    int i = list->size++; // Note: size is incremented before mmap to reserve the slot for multi-threaded access  
     size_t need_sz = sz + sizeof(blocklist_t);
     // alloc a new block, aversized or not, we are at the end of the list
     size_t allocsize = (need_sz>(i?DYNMMAPSZ:DYNMMAPSZ0))?need_sz:(i?DYNMMAPSZ:DYNMMAPSZ0);

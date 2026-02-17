@@ -2512,14 +2512,14 @@ EXPORT int my32_FT_Get_MM_Var(x64emu_t* emu, void* face, FT_MM_Var_32_t* amaster
 {
     FT_MM_Var_t* amaster_l = NULL;
     inplace_FT_FaceRec_enlarge(face);
-    int ret = my->FT_Get_MM_Var(face, amaster_l);
+    int ret = my->FT_Get_MM_Var(face, &amaster_l);
     inplace_FT_FaceRec_shrink(face);
     if(!amaster_l) return ret;
     // create a 32bits structure...
     size_t sz = sizeof(FT_MM_Var_32_t)+sizeof(void*);
     if(amaster_l->axis)
         sz += amaster_l->num_axis*sizeof(FT_Var_Axis_32_t);
-    if(amaster->namedstyle)
+    if(amaster_l->namedstyle)
         sz += amaster_l->num_namedstyles*(sizeof(FT_Var_Named_Style_32_t) + amaster_l->num_axis*sizeof(long_t));
     void* p = box32_calloc(1, sz);
     amaster = p; p += sizeof(FT_MM_Var_32_t);
@@ -2543,7 +2543,7 @@ EXPORT int my32_FT_Get_MM_Var(x64emu_t* emu, void* face, FT_MM_Var_32_t* amaster
     } else
         amaster->axis = 0;
     if(amaster_l->namedstyle) {
-        amaster->axis = to_ptrv(p);
+        amaster->namedstyle = to_ptrv(p);
         FT_Var_Named_Style_32_t* axis = p;
         p += amaster_l->num_axis*sizeof(FT_Var_Named_Style_32_t);
         for(uint32_t i=0; i<amaster_l->num_namedstyles; ++i) {
